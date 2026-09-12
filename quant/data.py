@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,7 +53,15 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = Path(__file__).resolve().parent.parent / "data_cache"
+# Vercel's serverless filesystem is read-only outside /tmp (and /tmp itself
+# is wiped between cold starts, so this is a same-invocation-only cache
+# there, not persistent) -- VERCEL is a platform-provided env var, always
+# set to "1" in that runtime. Everywhere else (local dev, CI) this writes
+# into the repo's own data_cache/ directory as a real, persistent cache.
+CACHE_DIR = (
+    Path("/tmp/quant_data_cache") if os.environ.get("VERCEL")
+    else Path(__file__).resolve().parent.parent / "data_cache"
+)
 
 
 @dataclass

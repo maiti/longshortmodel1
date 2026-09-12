@@ -58,9 +58,18 @@ scripts/
   run_model.py    CLI: run the model, print a report, save results.json + equity_curve.png
 
 webapp/
-  server.py         FastAPI backend (two endpoints: config schema, run)
+  api_app.py        The FastAPI app (two routes: config schema, run) — shared by local dev and Vercel
+  server.py         Local dev only: api_app + a static file mount over /public. Run with uvicorn.
   config_schema.py  Plain-language + math descriptions of every tunable parameter
-  static/           Vanilla HTML/CSS/JS frontend (Chart.js vendored, no build step)
+
+public/             Vanilla HTML/CSS/JS frontend (Chart.js vendored, no build step) — served
+                    directly by uvicorn locally, and by Vercel's CDN in production
+
+api/
+  index.py           Vercel serverless entrypoint: re-exports webapp.api_app's FastAPI app
+  requirements.txt   Minimal deps for the deployed function (no matplotlib/uvicorn/pytest)
+
+vercel.json         Rewrites /api/* to the one serverless function; everything else is static
 
 tests/              pytest unit tests for factors, portfolio sizing, validation, data/backtest
 ```
@@ -156,6 +165,49 @@ uvicorn webapp.server:app --reload
 # Tests
 pytest
 ```
+
+## Deploying to Vercel
+
+The repo is already structured for a zero-config Vercel deployment:
+`/public` is served as static files by Vercel's CDN, and `api/index.py`
+(a FastAPI app, re-exported from `webapp/api_app.py`) becomes one
+serverless function handling `/api/config/schema` and `/api/run` — see
+`vercel.json`'s rewrite rule and `api/requirements.txt` for the trimmed
+production dependency set (no matplotlib/uvicorn/pytest, which are only
+needed locally).
+
+**Easiest path (no credentials needed from an agent or CLI):** push this
+repo to GitHub, then in the Vercel dashboard click **Add New → Project**
+and import it. Vercel auto-detects the `api/` + `public/` layout — no
+build command, no framework preset needed. Every push to the connected
+branch redeploys automatically.
+
+**CLI path**, if you'd rather deploy from the command line:
+
+```bash
+npm install -g vercel   # or: npx vercel
+vercel login            # opens a browser to authenticate your Vercel account
+vercel                  # first deploy: answer the prompts (link or create a project)
+vercel --prod           # promote to your production URL
+```
+
+A couple of things worth knowing about the deployed version specifically:
+
+- **Data source defaults to `synthetic`** in production too, and for good
+  reason beyond matching this dev environment: it's fast (~1-3s per run,
+  well inside the default 10s function timeout in `vercel.json`) and
+  needs no outbound network call. Switching the UI to `yfinance` still
+  works if your Vercel plan's outbound network allows reaching Yahoo
+  Finance, but downloading and computing across the full ~94-ticker
+  universe can be slow enough to hit the function timeout — raise
+  `functions."api/index.py".maxDuration` in `vercel.json` (Hobby plans
+  cap lower than Pro) if you plan to rely on it there.
+- **No disk cache in production.** Vercel's filesystem is read-only
+  outside `/tmp`, and `/tmp` doesn't persist across cold starts, so
+  `webapp/api_app.py` disables the parquet cache entirely when it detects
+  the `VERCEL` environment variable (set automatically by the platform) —
+  every request regenerates or redownloads from scratch. Locally, the
+  cache still works and makes repeated UI experimentation instant.
 
 ## Known limitations (same honesty standard as the original doc)
 
