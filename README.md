@@ -196,12 +196,25 @@ A couple of things worth knowing about the deployed version specifically:
 - **Data source defaults to `synthetic`** in production too, and for good
   reason beyond matching this dev environment: it's fast (~1-3s per run,
   well inside the default 10s function timeout in `vercel.json`) and
-  needs no outbound network call. Switching the UI to `yfinance` still
-  works if your Vercel plan's outbound network allows reaching Yahoo
-  Finance, but downloading and computing across the full ~94-ticker
-  universe can be slow enough to hit the function timeout — raise
-  `functions."api/index.py".maxDuration` in `vercel.json` (Hobby plans
-  cap lower than Pro) if you plan to rely on it there.
+  needs no outbound network call.
+- **`yfinance` is intentionally not installed in the deployed function**
+  (see `api/requirements.txt`, which is deliberately trimmed to
+  fastapi/pandas/numpy/scipy). Selecting it in the UI in production fails
+  with a clear "No module named 'yfinance'" error rather than working —
+  this was a deliberate trade-off to keep the deployed bundle small and
+  the build reliable, since yfinance pulls in a fair number of transitive
+  dependencies for a feature that's slow to use from a 10-second
+  serverless function anyway. To enable it, add `yfinance` (and raise
+  `functions."api/index.py".maxDuration` in `vercel.json` — Hobby plans
+  cap lower than Pro) yourself.
+- **scipy is a real runtime dependency, not an unused one**: pandas'
+  `Series.corr(method="spearman")`, used in the Information Coefficient
+  calculation, imports `scipy.stats` internally and raises
+  `ModuleNotFoundError` at request time (not at import time) if it's
+  missing — a `grep` for `import scipy` across this codebase will find
+  nothing, which is exactly what makes this easy to remove by mistake
+  thinking it's dead weight. If you ever see `/api/run` failing in
+  production with that error, this is why.
 - **No disk cache in production.** Vercel's filesystem is read-only
   outside `/tmp`, and `/tmp` doesn't persist across cold starts, so
   `webapp/api_app.py` disables the parquet cache entirely when it detects

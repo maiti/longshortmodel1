@@ -4,6 +4,14 @@ let equityChart = null;
 let walkForwardChart = null;
 let turnoverChart = null;
 
+// Dark-theme defaults for every Chart.js instance -- without this, default
+// black axis/legend text is invisible against the singularity background.
+if (window.Chart) {
+  Chart.defaults.color = "#a9b0d6";
+  Chart.defaults.borderColor = "rgba(148, 163, 255, 0.14)";
+  Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif";
+}
+
 function fmtPct(x, decimals = 1) {
   if (x === null || x === undefined || Number.isNaN(x)) return "—";
   return (x * 100).toFixed(decimals) + "%";
@@ -85,6 +93,9 @@ function onConfigChanged() {
 
 async function fetchSchema() {
   const res = await fetch("/api/config/schema");
+  if (!res.ok) {
+    throw new Error(`server returned HTTP ${res.status}`);
+  }
   schema = await res.json();
   renderConfigForm();
 }
@@ -140,22 +151,22 @@ function renderOverview(result) {
   const fp = perf.full_period, oos = perf.out_of_sample;
 
   cards.innerHTML = `
-    <div class="metric-card">
+    <div class="metric-card tilt-card">
       <div class="label">Full-period Sharpe</div>
       <div class="value">${fmtNum(fp.sharpe)}</div>
       <div class="note">${significanceBadge(fp.significant_at_95)}</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card tilt-card">
       <div class="label">Annualized return</div>
       <div class="value">${fmtPct(fp.annualized_return)}</div>
       <div class="note">net of estimated trading costs</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card tilt-card">
       <div class="label">Max drawdown</div>
       <div class="value">${fmtPct(fp.max_drawdown)}</div>
       <div class="note">worst peak-to-trough decline</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card tilt-card">
       <div class="label">Out-of-sample Sharpe</div>
       <div class="value">${fmtNum(oos.sharpe)}</div>
       <div class="note">${significanceBadge(oos.significant_at_95)}</div>
@@ -327,10 +338,28 @@ function setupTabs() {
 
 async function init() {
   setupTabs();
-  await fetchSchema();
+
+  // Wire the Run button up FIRST, before any network call: if fetchSchema()
+  // or the initial auto-run below fails (backend cold-start hiccup, a
+  // dependency missing in production, whatever), the button must still be
+  // clickable and able to retry -- a dead button with no listener attached
+  // is the worst possible failure mode here.
   document.getElementById("run-btn").addEventListener("click", runModel);
+
+  try {
+    await fetchSchema();
+  } catch (e) {
+    showError("Could not load the configuration form from the server: " + e.message +
+      ". Try reloading the page; if it keeps happening, the backend may be down.");
+    return;
+  }
   document.querySelectorAll("[data-key]").forEach(el => el.addEventListener("change", onConfigChanged));
-  await runModel(); // run once with defaults so the page isn't empty
+
+  try {
+    await runModel(); // run once with defaults so the page isn't empty
+  } catch (e) {
+    showError("The initial run failed: " + e.message + ". Adjust settings and try Run model again.");
+  }
 }
 
 init();

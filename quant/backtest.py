@@ -119,7 +119,10 @@ def run_backtest(
             period_net = period_gross.copy()
             period_net.iloc[0] -= cost  # charge the trade's cost on the first day it's held
             net_returns.loc[holding_dates] = period_net
-            trailing_book_returns = pd.concat([trailing_book_returns, period_net])
+            trailing_book_returns = (
+                period_net if trailing_book_returns.empty
+                else pd.concat([trailing_book_returns, period_net])
+            )
 
         current_weights = new_weights
 
