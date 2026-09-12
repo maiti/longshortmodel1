@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+data_cache/*.parquet
+results/*.json
+results/*.png
+.venv/
+*.egg-info/
+node_modules/
