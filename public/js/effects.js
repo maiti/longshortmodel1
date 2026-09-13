@@ -79,36 +79,68 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
   }
 
   // ---------------------------------------------------------------------
-  // Black hole intro: a warping funnel of concentric discs, radial lines,
-  // and inward-flowing particles on the landing screen, matched against a
-  // reference screenshot of the actual component -- a shallow, flattened
-  // vortex sitting low in the frame (not centered), with a teal outer edge
-  // sliding through blue/purple into a magenta glowing core, and square
-  // particles rather than round ones. The animation clock runs on real
+  // Black hole intro: a genuine sinkhole/divot in a wireframe grid, matched
+  // against a reference screenshot -- not a flat set of concentric circles
+  // with straight spokes, but a grid whose "latitude" rings get rounder and
+  // more tightly packed as they near the throat and flatten out toward a
+  // near-invisible sliver at the far edges, so the connecting "meridian"
+  // lines curve the way they would over a real funnel surface rather than
+  // running dead straight to a vanishing point. A large animated radial
+  // wash (not a single static glow blob) cycles teal -> blue -> purple ->
+  // magenta in bands that continuously drift inward toward the throat,
+  // like color flowing down the drain. The animation clock runs on real
   // elapsed time (delta-time), not a fixed per-frame increment, so motion
   // stays smooth regardless of actual frame rate. Clicking "Enter"
   // accelerates everything with an eased (not power-law) ramp and zooms
-  // into the core before the dashboard is revealed underneath.
+  // into the throat before the dashboard is revealed underneath.
   // ---------------------------------------------------------------------
   safe(function initBlackHoleIntro() {
     const canvas = document.getElementById("blackhole-canvas");
     if (!canvas || !canvas.getContext) return;
     const ctx = canvas.getContext("2d");
-    let w, h, dpr, cx, cy;
+    let w, h, dpr, cx, cy, maxR;
     let rafId = null;
     let t = 0; // seconds, advanced by real delta-time each frame
     let lastNow = null;
     let warping = false;
     let warpStart = 0;
 
-    const particleRGB = "255, 255, 255";
-    const numDiscs = 50;
-    const numLines = 50;
-    const numParticles = 140;
-    const SQUASH = 0.32; // shallow, flattened perspective, not near-circular
-    const CENTER_Y_FRAC = 0.62; // funnel throat sits low in the frame
-    const HUE_CORE = 305; // magenta, near the center
-    const HUE_EDGE = 185; // teal, at the outer edge
+    const NUM_RINGS = 26;
+    const NUM_SPOKES = 40;
+    const NUM_PARTICLES = 130;
+    const RADIUS_POWER = 1.7; // > 1 packs rings tightly near the throat
+    const SQUASH_CENTER = 0.85; // near the throat, rings read almost round
+    const SQUASH_EDGE = 0.1; // far out, rings flatten to a sliver (steep perspective)
+    const CENTER_Y_FRAC = 0.58; // the throat sits low in the frame
+    const ROTATION_SPEED = 0.05; // slow swirl, radians/sec at speedMult=1
+    const FLOW_SPEED = 0.09; // how fast color bands drift inward, cycles/sec
+
+    // Fixed spatial hue mapping -- magenta at the throat (u=0) fading
+    // through purple and blue out to teal at the rim (u=1). This stays
+    // constant; it's the grid's radius (u), not the palette itself, that
+    // moves over time, so a ring sliding inward visibly passes through
+    // this same gradient the way a real object would sliding down a drain
+    // -- rather than the whole screen's colors swapping in place.
+    const HUE_STOPS = [300, 262, 222, 184];
+
+    function hueForU(u) {
+      const uc = Math.min(Math.max(u, 0), 1);
+      const n = HUE_STOPS.length - 1;
+      const scaled = uc * n;
+      const idx = Math.min(Math.floor(scaled), n - 1);
+      const frac = scaled - idx;
+      return HUE_STOPS[idx] + (HUE_STOPS[idx + 1] - HUE_STOPS[idx]) * frac;
+    }
+
+    // Geometry of ring index i (0 = throat, NUM_RINGS-1 = outer rim): how
+    // far out it sits and how flattened it is. Spokes reuse this per ring
+    // so their curvature falls out naturally from the varying squash.
+    function ringGeom(u) {
+      return {
+        r: maxR * Math.pow(u, RADIUS_POWER),
+        squash: SQUASH_CENTER + (SQUASH_EDGE - SQUASH_CENTER) * u,
+      };
+    }
 
     function resize() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -121,6 +153,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       cx = w / 2;
       cy = h * CENTER_Y_FRAC;
+      maxR = Math.hypot(w, h) * 0.62;
     }
     resize();
     window.addEventListener("resize", () => safe(resize));
@@ -128,81 +161,108 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     function spawnParticle() {
       return {
         angle: Math.random() * Math.PI * 2,
-        radius: Math.random() * Math.max(w, h) * 0.7 + 60,
-        speed: 0.5 + Math.random() * 1.1,
+        u: Math.random() * 0.85 + 0.15,
+        speed: 0.05 + Math.random() * 0.09,
         size: 1.4 + Math.random() * 2.6,
       };
     }
-    const particles = Array.from({ length: numParticles }, spawnParticle);
+    const particles = Array.from({ length: NUM_PARTICLES }, spawnParticle);
 
-    function hueForPhase(phase) {
-      return HUE_CORE + (HUE_EDGE - HUE_CORE) * phase;
+    function drawWash(rotation) {
+      // A large, spatially fixed color wash filling the whole basin --
+      // magenta at the throat fading through purple/blue to teal at the
+      // rim. This anchors the scene's overall coloring; the animated
+      // "flowing inward" motion comes from the rings below moving through
+      // this stable gradient, not from the gradient itself repainting.
+      const STOPS = 28;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR * 1.05);
+      for (let s = 0; s <= STOPS; s++) {
+        const posFrac = s / STOPS;
+        const hue = hueForU(posFrac);
+        const lightness = 60 - posFrac * 44;
+        const alpha = Math.pow(1 - posFrac, 1.5) * 0.85;
+        grad.addColorStop(posFrac, `hsla(${hue}, 80%, ${lightness}%, ${alpha})`);
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+      void rotation; // wash itself doesn't need speedMult; kept for a uniform call signature
     }
 
-    function drawDiscs(speedMult) {
-      const maxR = Math.hypot(w, h) * 0.62;
-      for (let i = 0; i < numDiscs; i++) {
-        const phase = ((i / numDiscs + t * 2.2 * speedMult) % 1 + 1) % 1;
-        const r = phase * maxR;
-        const alpha = Math.max(0, 1 - phase) * 0.65;
+    function drawRings(rotation) {
+      // Each ring's radial position (not its color-vs-radius mapping)
+      // advances over time and wraps, so individual rings continuously
+      // slide from the rim toward the throat and vanish -- like objects
+      // actually flowing down the drain -- picking up the wash's fixed
+      // hue-for-radius color as they go, rather than the color cycling
+      // in place.
+      for (let i = 0; i < NUM_RINGS; i++) {
+        const u = ((i / NUM_RINGS - t * FLOW_SPEED * rotation.speedMult) % 1 + 1) % 1;
+        const { r, squash } = ringGeom(u);
+        const hue = hueForU(u);
+        const alpha = 0.32 + u * 0.3;
         ctx.beginPath();
-        ctx.ellipse(cx, cy, r, r * SQUASH, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = `hsla(${hueForPhase(phase)}, 85%, 62%, ${alpha})`;
-        ctx.lineWidth = 1;
+        ctx.ellipse(cx, cy, r, r * squash, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = `hsla(${hue}, 90%, 68%, ${alpha})`;
+        ctx.lineWidth = 1.1;
         ctx.stroke();
       }
     }
 
-    function drawLines(speedMult) {
-      const maxR = Math.hypot(w, h) * 0.72;
-      const rotation = t * 1.5 * speedMult;
-      for (let i = 0; i < numLines; i++) {
-        const angle = (i / numLines) * Math.PI * 2 + rotation;
-        const x2 = cx + Math.cos(angle) * maxR;
-        const y2 = cy + Math.sin(angle) * maxR * SQUASH;
-        const edgeHue = HUE_EDGE;
-        const grad = ctx.createLinearGradient(cx, cy, x2, y2);
-        grad.addColorStop(0, `hsla(${HUE_CORE}, 90%, 65%, 0.45)`);
-        grad.addColorStop(1, `hsla(${edgeHue}, 85%, 60%, 0)`);
+    function drawSpokes(rotation) {
+      // Each spoke walks outward through every ring's radius at a fixed
+      // angle. Because squash varies per ring, connecting those points
+      // produces a naturally curved meridian -- exactly the bent-line look
+      // of a real warped surface, without any actual 3D projection math.
+      for (let s = 0; s < NUM_SPOKES; s++) {
+        const angle = (s / NUM_SPOKES) * Math.PI * 2 + rotation.angle;
         ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(x2, y2);
+        for (let i = 0; i < NUM_RINGS; i++) {
+          const u = i / (NUM_RINGS - 1);
+          const { r, squash } = ringGeom(u);
+          const x = cx + Math.cos(angle) * r;
+          const y = cy + Math.sin(angle) * r * squash;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        const outer = ringGeom(1);
+        const x2 = cx + Math.cos(angle) * outer.r;
+        const y2 = cy + Math.sin(angle) * outer.r * outer.squash;
+        const grad = ctx.createLinearGradient(cx, cy, x2, y2);
+        grad.addColorStop(0, `hsla(${hueForU(0)}, 90%, 70%, 0.4)`);
+        grad.addColorStop(1, `hsla(${hueForU(1)}, 85%, 62%, 0)`);
         ctx.strokeStyle = grad;
         ctx.lineWidth = 1;
         ctx.stroke();
       }
     }
 
-    function drawParticles(speedMult, dtFrames) {
-      const resetRadius = Math.max(w, h) * 0.75;
+    function drawParticles(rotation, dtSec) {
       particles.forEach((p) => {
-        p.radius -= p.speed * speedMult * dtFrames;
-        if (p.radius < 4) {
-          Object.assign(p, spawnParticle());
-          p.radius = resetRadius;
-        }
-        const x = cx + Math.cos(p.angle) * p.radius;
-        const y = cy + Math.sin(p.angle) * p.radius * SQUASH;
-        const alpha = Math.min(1, (resetRadius - p.radius) / 120);
-        ctx.fillStyle = `rgba(${particleRGB}, ${0.75 * alpha})`;
+        p.u -= p.speed * rotation.speedMult * dtSec;
+        if (p.u < 0.03) Object.assign(p, spawnParticle(), { u: 0.9 + Math.random() * 0.1 });
+        const { r, squash } = ringGeom(p.u);
+        const x = cx + Math.cos(p.angle) * r;
+        const y = cy + Math.sin(p.angle) * r * squash;
+        const alpha = Math.min(1, (0.95 - p.u) / 0.25 + 0.15);
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.8 * alpha})`;
         ctx.fillRect(x - p.size / 2, y - p.size / 2, p.size, p.size);
       });
     }
 
-    function drawCore() {
-      // Bright bloom at the vanishing point -- white-hot center fading
-      // through magenta/purple, blended additively so it actually glows
-      // against the discs and lines behind it.
+    function drawThroatFlare() {
+      // A soft, small highlight right at the throat -- a light source, not
+      // a hard disc -- blended additively so it brightens the wash below
+      // rather than sitting on top of it as a flat circle.
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
-      const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 95);
-      core.addColorStop(0, "rgba(255, 255, 255, 0.95)");
-      core.addColorStop(0.22, "rgba(255, 140, 220, 0.85)");
-      core.addColorStop(0.5, "rgba(190, 60, 220, 0.5)");
-      core.addColorStop(1, "rgba(120, 20, 160, 0)");
-      ctx.fillStyle = core;
+      const r = Math.max(28, maxR * 0.06);
+      const flare = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      flare.addColorStop(0, "rgba(255, 255, 255, 0.8)");
+      flare.addColorStop(0.5, "rgba(255, 170, 230, 0.4)");
+      flare.addColorStop(1, "rgba(255, 170, 230, 0)");
+      ctx.fillStyle = flare;
       ctx.beginPath();
-      ctx.arc(cx, cy, 95, 0, Math.PI * 2);
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }
@@ -212,6 +272,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         if (lastNow === null) lastNow = now;
         const dt = Math.min((now - lastNow) / 1000, 0.05); // clamp long tab-switch gaps
         lastNow = now;
+        t += dt;
 
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, w, h);
@@ -225,12 +286,13 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
           canvas.style.transform = `scale(${1 + eased * 2.6})`;
           canvas.style.filter = `blur(${eased * 3}px)`;
         }
+        const rotation = { angle: t * ROTATION_SPEED * speedMult, speedMult };
 
-        t += dt;
-        drawLines(speedMult);
-        drawDiscs(speedMult);
-        drawParticles(speedMult * 4, dt * 60);
-        drawCore();
+        drawWash(rotation);
+        drawSpokes(rotation);
+        drawRings(rotation);
+        drawParticles(rotation, dt);
+        drawThroatFlare();
 
         rafId = requestAnimationFrame(frame);
       } catch (e) {
