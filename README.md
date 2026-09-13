@@ -149,10 +149,10 @@ by copying a result.
 ## Running it
 
 ```bash
-# requirements.txt alone (fastapi/pandas/numpy/scipy) is enough to import
-# and run the model and API; requirements-dev.txt adds local-only tools
-# (uvicorn to serve it, matplotlib for the CLI's PNG, yfinance for real
-# data, pyarrow for the disk cache, pytest). Install both for local dev:
+# requirements.txt alone (fastapi/pandas/numpy/yfinance/pyarrow) is
+# enough to import and run the model and API against either data source;
+# requirements-dev.txt adds purely local tools (uvicorn to serve it,
+# matplotlib for the CLI's PNG, pytest). Install both for local dev:
 pip install -r requirements.txt -r requirements-dev.txt
 
 # CLI: prints a full report, writes results/results.json + results/equity_curve.png
@@ -198,20 +198,35 @@ vercel --prod           # promote to your production URL
 
 A couple of things worth knowing about the deployed version specifically:
 
-- **Data source defaults to `synthetic`** in production too, and for good
-  reason beyond matching this dev environment: it's fast (~1-3s per run,
-  well inside the default 10s function timeout in `vercel.json`) and
-  needs no outbound network call.
-- **`yfinance` is intentionally not installed in the deployed function**
-  (see `api/requirements.txt`, which is deliberately trimmed to
-  fastapi/pandas/numpy). Selecting it in the UI in production fails with
-  a clear "No module named 'yfinance'" error rather than working — this
-  was a deliberate trade-off to keep the deployed bundle small and the
-  build reliable, since yfinance pulls in a fair number of transitive
-  dependencies for a feature that's slow to use from a 10-second
-  serverless function anyway. To enable it, add `yfinance` (and raise
-  `functions."api/index.py".maxDuration` in `vercel.json` — Hobby plans
-  cap lower than Pro) yourself.
+- **Data source defaults to `synthetic`** in production too: it's fast
+  (~1-3s per run) and needs no outbound network call, so it's the
+  reliable choice for a first impression of the app.
+- **`yfinance` (real Yahoo Finance data) works in production too** —
+  `api/requirements.txt` includes it and `pyarrow`, and
+  `functions."api/index.py".maxDuration` in `vercel.json` is raised to
+  60s to give a real download room to complete. Two things worth knowing
+  if you rely on this path:
+    1. **It can still be slow, and 60s is not a guarantee.** Downloading
+       and computing across the full ~94-ticker, 7-year universe depends
+       on Yahoo Finance's response time that day; `quant/data.py`
+       batches the download (50 tickers per request, individual retries
+       for any that drop) but a bad run could still time out. If you hit
+       that consistently, either raise `maxDuration` further (Hobby plans
+       cap lower than Pro) or reduce `ModelConfig.tickers` /
+       `start_date`-`end_date` for a smaller pull.
+    2. **The disk cache is on in production now, specifically because of
+       this path**: `webapp/api_app.py`'s `USE_DATA_CACHE` used to be
+       `False` on Vercel (no point caching to a `/tmp` that's wiped
+       between cold starts) — but a *warm* container, the common case
+       while someone is actively clicking around the UI with the same
+       settings, now reuses a previous download instead of redoing it,
+       which matters far more for a slow real-data fetch than for the
+       ~1-3s synthetic path it was originally reasoned about.
+  Bundle size headroom is fine with both back in: fastapi + pandas +
+  numpy + yfinance + pyarrow installs to ~358MB, comfortably under
+  Vercel's 500MB limit even without scipy's removal — that removal
+  stands on its own merits (see below) rather than being needed to make
+  room for this.
 - **`requirements.txt` at the project root is what Vercel's build actually
   installs for the function** — a build log confirmed this directly
   ("Installing required dependencies from requirements.txt"). Two real

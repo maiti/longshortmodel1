@@ -25,7 +25,6 @@ README's "Deploying to Vercel" section for the full story.
 from __future__ import annotations
 
 import copy
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -40,12 +39,14 @@ from quant.config import ModelConfig
 from quant.pipeline import run_full_pipeline
 from webapp.config_schema import CONFIG_SCHEMA
 
-# Vercel's filesystem is read-only outside /tmp, and /tmp is wiped between
-# cold starts, so a disk-backed parquet cache buys almost nothing there
-# while costing an extra dependency (pyarrow) in the deployed bundle --
-# skip it in that environment and just regenerate/redownload each call.
-# Locally, caching makes repeated UI experimentation fast.
-USE_DATA_CACHE = not bool(os.environ.get("VERCEL"))
+# Caching is on everywhere, including Vercel: /tmp is wiped between cold
+# starts, so it buys nothing on a genuinely fresh invocation, but a warm
+# container (the common case while someone is actively experimenting with
+# the same date range/tickers/seed in the UI) reuses it across requests --
+# which matters a lot for the yfinance data source specifically, since
+# re-downloading ~94 tickers of history on every single click risks the
+# function timeout for no reason once the first call already paid for it.
+USE_DATA_CACHE = True
 
 app = FastAPI(title="Long/Short Equity Factor Model API")
 app.add_middleware(
