@@ -677,13 +677,22 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     const config = {
       SIM_RESOLUTION: 96,
       DYE_RESOLUTION: 480,
-      DENSITY_DISSIPATION: 3.5,
+      // Lower than the reference's own default (3.5) -- at that rate dye
+      // decays to near-nothing well before the 0.7s gravity delay below,
+      // leaving nothing visible left to pull. This keeps a trail
+      // perceptible through ~0.7-0.8s so the pull toward the singularity
+      // actually reads, fading out the rest of the way by ~1.2s.
+      DENSITY_DISSIPATION: 1.8,
       VELOCITY_DISSIPATION: 2,
       PRESSURE: 0.1,
       PRESSURE_ITERATIONS: 15,
       CURL: 3,
-      SPLAT_RADIUS: 0.2,
-      SPLAT_FORCE: 6000,
+      // Smaller and less energetic than the reference's own defaults --
+      // this runs across the whole site, not just a demo box, so it needs
+      // to stay a light accent rather than something big/bright enough to
+      // obscure text or buttons underneath it.
+      SPLAT_RADIUS: 0.1,
+      SPLAT_FORCE: 4200,
     };
 
     const glParams = { alpha: true, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false };
@@ -1029,7 +1038,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     function nextSplatColor() {
       const cyclePos = (Math.sin(performance.now() * 0.00028) + 1) / 2;
       const m = Math.min(1, Math.max(0, cyclePos + (Math.random() - 0.5) * 0.18));
-      const INTENSITY = 0.9;
+      const INTENSITY = 0.5; // dim enough to stay a background accent, not obscure UI text
       return {
         r: (HOT[0] + (COOL[0] - HOT[0]) * m) * INTENSITY,
         g: (HOT[1] + (COOL[1] - HOT[1]) * m) * INTENSITY,
@@ -1061,6 +1070,27 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
 
     const pointer = { x: 0, y: 0, prevX: 0, prevY: 0, moved: false, color: nextSplatColor() };
     let havePointer = false;
+
+    // Gravity: every trail is pulled toward the dashboard singularity's
+    // screen position (viewport center), but only after it's had time to
+    // drift naturally -- a sparse history of recent pointer positions
+    // (sampled well below mousemove's native rate, so this stays cheap)
+    // gets an extra velocity-only splat each frame once it's old enough,
+    // with the pull ramping in quadratically (an acceleration, not an
+    // instant switch) until the trail's total lifetime ends.
+    const GRAVITY_DELAY_MS = 700;
+    const GRAVITY_LIFETIME_MS = 1200;
+    const GRAVITY_SAMPLE_INTERVAL_MS = 55;
+    // Much larger than a naive kinematic estimate would suggest: the
+    // solver's incompressibility (pressure projection) resists a purely
+    // convergent velocity field and cancels out a large share of it each
+    // step, so the constant has to substantially overshoot what a
+    // frictionless-particle version of the same pull would need.
+    const GRAVITY_ACCEL = 16000;
+    const ZERO_COLOR = { r: 0, g: 0, b: 0 }; // velocity-only splat: nudges existing dye, adds none
+    let gravityHistory = [];
+    let lastGravitySampleAt = 0;
+
     window.addEventListener("mousemove", (e) => {
       pointer.prevX = havePointer ? pointer.x : e.clientX;
       pointer.prevY = havePointer ? pointer.y : e.clientY;
@@ -1069,6 +1099,12 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       pointer.moved = havePointer && (pointer.x !== pointer.prevX || pointer.y !== pointer.prevY);
       pointer.color = nextSplatColor();
       havePointer = true;
+
+      const nowMs = Date.now();
+      if (nowMs - lastGravitySampleAt >= GRAVITY_SAMPLE_INTERVAL_MS) {
+        lastGravitySampleAt = nowMs;
+        gravityHistory.push({ x: pointer.x, y: pointer.y, t: nowMs });
+      }
     });
 
     function splatPointer() {
@@ -1080,6 +1116,32 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       if (aspectRatio < 1) dx *= aspectRatio;
       if (aspectRatio > 1) dy /= aspectRatio;
       splat(texcoordX, texcoordY, dx, dy, pointer.color);
+    }
+
+    function applyGravityPulls(now, dt) {
+      if (gravityHistory.length === 0) return;
+      const cx = window.innerWidth / 2;
+      const cy = window.innerHeight / 2;
+      const aspectRatio = canvas.width / canvas.height;
+      gravityHistory = gravityHistory.filter((s) => now - s.t <= GRAVITY_LIFETIME_MS);
+      gravityHistory.forEach((s) => {
+        const age = now - s.t;
+        if (age < GRAVITY_DELAY_MS) return;
+        const p = (age - GRAVITY_DELAY_MS) / (GRAVITY_LIFETIME_MS - GRAVITY_DELAY_MS);
+        const eased = p * p; // ramps in, reading as acceleration rather than a switched-on force
+        const rawDx = cx - s.x;
+        const rawDy = cy - s.y;
+        const dist = Math.hypot(rawDx, rawDy) || 1;
+        // Same texcoord-space convention as splatPointer's own dx/dy, just
+        // pointed toward the singularity instead of the cursor's recent
+        // motion, and scaled by dt since this runs once per frame (an
+        // actual continuous acceleration) rather than once per input event.
+        let dx = (rawDx / dist) * GRAVITY_ACCEL * eased * dt;
+        let dy = -(rawDy / dist) * GRAVITY_ACCEL * eased * dt;
+        if (aspectRatio < 1) dx *= aspectRatio;
+        if (aspectRatio > 1) dy /= aspectRatio;
+        splat(s.x / window.innerWidth, 1.0 - s.y / window.innerHeight, dx, dy, ZERO_COLOR);
+      });
     }
 
     let lastUpdateTime = Date.now();
@@ -1169,6 +1231,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         pointer.moved = false;
         splatPointer();
       }
+      applyGravityPulls(now, dt);
       step(dt);
       render();
       requestAnimationFrame(frame);
@@ -1178,14 +1241,15 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
 
   // Canvas2D fallback for the cursor trail, used if WebGL or the float
   // texture extensions the fluid sim needs aren't available -- particles
-  // spawned at the pointer that get pulled toward the dashboard
-  // singularity's screen position with continuously increasing force,
-  // gently at first and visibly rushed in by the end of their ~1s life.
-  // The pull direction is recomputed every frame from each particle's
-  // current position (true "gravity", not a frozen initial heading) and
-  // rotated by a fixed angle so particles spiral inward instead of flying a
-  // straight line. Colored along the same amber<->blue accretion palette as
-  // the WebGL path, so the fallback still reads as the same effect.
+  // spawned at the pointer that drift naturally for the first 0.7s of a
+  // ~1.2s life, then get pulled toward the dashboard singularity's screen
+  // position with quadratically increasing force (an acceleration, not a
+  // switched-on force) for the rest of it. The pull direction is
+  // recomputed every frame from each particle's current position (true
+  // "gravity", not a frozen initial heading) and rotated by a fixed angle
+  // so particles spiral inward instead of flying a straight line. Colored
+  // along the same amber<->blue accretion palette as the WebGL path, so
+  // the fallback still reads as the same effect.
   function renderCursorParticlesFallback(canvas) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -1193,8 +1257,9 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     let particles = [];
     let lastNow = null;
 
-    const LIFETIME_MS = 1000;
-    const PULL_STRENGTH = 2600;
+    const LIFETIME_MS = 1200;
+    const GRAVITY_DELAY_FRAC = 700 / LIFETIME_MS; // pull stays off for the first 0.7s
+    const PULL_STRENGTH = 5200;
     const SPIRAL_ANGLE = 0.5;
 
     function resize() {
@@ -1215,18 +1280,18 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       // uses, so simultaneous particles share a coherent, drifting color
       // rather than each picking an independent random one.
       const cyclePos = (Math.sin(performance.now() * 0.00028) + 1) / 2;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 2; i++) {
         particles.push({
-          x: e.clientX + (Math.random() - 0.5) * 6,
-          y: e.clientY + (Math.random() - 0.5) * 6,
-          vx: (Math.random() - 0.5) * 24,
-          vy: (Math.random() - 0.5) * 24,
+          x: e.clientX + (Math.random() - 0.5) * 5,
+          y: e.clientY + (Math.random() - 0.5) * 5,
+          vx: (Math.random() - 0.5) * 20,
+          vy: (Math.random() - 0.5) * 20,
           born: performance.now(),
-          size: 2.4 + Math.random() * 3.2,
+          size: 1.5 + Math.random() * 2.1,
           colorMix: Math.min(1, Math.max(0, cyclePos + (Math.random() - 0.5) * 0.18)),
         });
       }
-      if (particles.length > 320) particles.splice(0, particles.length - 320);
+      if (particles.length > 260) particles.splice(0, particles.length - 260);
     });
 
     function frame(now) {
@@ -1249,14 +1314,18 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         const uy = dy / dist;
         const dirX = ux * cosA - uy * sinA;
         const dirY = ux * sinA + uy * cosA;
-        const pull = PULL_STRENGTH * age * age;
+        const pullProgress = age < GRAVITY_DELAY_FRAC ? 0 : (age - GRAVITY_DELAY_FRAC) / (1 - GRAVITY_DELAY_FRAC);
+        const pull = PULL_STRENGTH * pullProgress * pullProgress;
         p.vx += dirX * pull * dt;
         p.vy += dirY * pull * dt;
         p.x += p.vx * dt;
         p.y += p.vy * dt;
 
         const fadeIn = Math.min(age / 0.08, 1);
-        const alpha = fadeIn * (1 - age);
+        // Dimmed (0.7x ceiling) to match the WebGL path's own reduced
+        // intensity -- a light accent rather than something that competes
+        // with the text and buttons it passes over.
+        const alpha = fadeIn * (1 - age) * 0.7;
         if (alpha <= 0.01) return;
 
         // Amber-to-blue blended directly in RGB (not via hue-degree
@@ -1281,7 +1350,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
           ctx.stroke();
         }
 
-        const glowR = radius * 3.2;
+        const glowR = radius * 2.4;
         const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, glowR);
         glow.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
         glow.addColorStop(0.4, `rgba(${r}, ${g}, ${b}, ${alpha * 0.55})`);
