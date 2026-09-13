@@ -245,16 +245,29 @@ A couple of things worth knowing about the deployed version specifically:
   the `VERCEL` environment variable (set automatically by the platform) —
   every request regenerates or redownloads from scratch. Locally, the
   cache still works and makes repeated UI experimentation instant.
-- **The rewrite routes everything to the function, not just `/api/*`.**
-  An earlier, narrower rule (`"/api/(.*)"` → `/api/index`) 404'd on every
-  API call once the build actually succeeded — Vercel's own build log
-  carries a warning that "internal rewrites in backend framework
-  projects now route requests using the rewritten destination path,"
-  which is exactly the scenario a single-file FastAPI app needs a
-  catch-all for. `vercel.json` now rewrites `"/(.*)"` to `/api/index`,
-  matching Vercel's own documented FastAPI pattern; this is safe for the
-  static frontend because Vercel checks real files under `/public`
-  *before* applying rewrites, so `/css/styles.css`, `/js/app.js`, and `/`
+- **Every API route the FastAPI app registers is duplicated at
+  `/api/index`, and the frontend calls `/api/index` for everything —
+  this looks redundant and isn't.** `vercel.json`'s catch-all rewrite
+  (`"/(.*)"` → `/api/index`) doesn't behave like an ordinary rewrite for
+  this project. A live Vercel function log for a request to
+  `/api/config/schema` showed `Path: /api/index` — Vercel's build log
+  even warns about this directly ("internal rewrites in backend
+  framework projects now route requests using the rewritten destination
+  path"): for a detected backend-framework project, the ASGI app itself
+  receives the rewrite's *destination* as its request path, not the
+  browser's original URL. So no matter what path the frontend calls
+  (`/api/run`, `/api/config/schema`, anything), FastAPI's router sees
+  `/api/index` for all of them, with only the HTTP method preserved —
+  meaning a route only reachable at some other path 404s unconditionally
+  in production, however correct it looks in `/docs` or against the
+  local dev server. `webapp/api_app.py` registers each handler at both
+  its semantic path (`/api/config/schema`, `/api/run` — useful locally,
+  via curl, and in `/docs`) and at `/api/index` under the matching HTTP
+  method (what production actually reaches), and `public/js/app.js`
+  calls `/api/index` for both GET and POST since that's the one path
+  guaranteed to work in both environments. This is safe for the static
+  frontend because Vercel checks real files under `/public` *before*
+  applying any rewrite, so `/css/styles.css`, `/js/app.js`, and `/`
   itself still resolve to their actual files rather than hitting the
   function.
 

@@ -92,7 +92,11 @@ function onConfigChanged() {
 }
 
 async function fetchSchema() {
-  const res = await fetch("/api/config/schema");
+  // /api/index, not /api/config/schema: see webapp/api_app.py's module
+  // docstring -- Vercel's rewrite for this project replaces the request
+  // path itself with /api/index, so that's the one path guaranteed to
+  // work in both this local dev server and production.
+  const res = await fetch("/api/index");
   if (!res.ok) {
     throw new Error(`server returned HTTP ${res.status}`);
   }
@@ -120,7 +124,7 @@ async function runModel() {
   btn.disabled = true;
   loading.style.display = "flex";
   try {
-    const res = await fetch("/api/run", {
+    const res = await fetch("/api/index", {  // see the GET /api/index comment above
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(overrides),
