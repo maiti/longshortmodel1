@@ -80,10 +80,14 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
 
   // ---------------------------------------------------------------------
   // Black hole intro: a warping tunnel of concentric discs, radial lines,
-  // and inward-flowing particles on the landing screen. Clicking "Enter"
-  // accelerates everything and zooms into the core before the dashboard
-  // is revealed underneath -- an "entering the singularity" beat rather
-  // than a plain fade or zoom.
+  // and inward-flowing particles on the landing screen. Matches the
+  // referenced component's own defaults (neutral gray stroke, white
+  // particles, 50 lines, 50 discs) rather than the site's blue accent, so
+  // it reads as "the black hole background" rather than a loose homage --
+  // the blue shows up at the very core instead, as the one accretion-disk
+  // accent tying it to the rest of the site. Clicking "Enter" accelerates
+  // everything and zooms into the core before the dashboard is revealed
+  // underneath -- an "entering the singularity" beat, not a plain fade.
   // ---------------------------------------------------------------------
   safe(function initBlackHoleIntro() {
     const canvas = document.getElementById("blackhole-canvas");
@@ -95,9 +99,11 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     let warping = false;
     let warpStart = 0;
 
-    const numDiscs = 40;
-    const numLines = 36;
-    const numParticles = 130;
+    const strokeRGB = "115, 115, 115"; // #737373, the reference's default strokeColor
+    const particleRGB = "255, 255, 255"; // the reference's default particleRGBColor
+    const numDiscs = 50;
+    const numLines = 50;
+    const numParticles = 140;
 
     function resize() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -129,11 +135,10 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       for (let i = 0; i < numDiscs; i++) {
         const phase = ((i / numDiscs + t * 0.0022 * speedMult) % 1 + 1) % 1;
         const r = phase * maxR;
-        const alpha = Math.max(0, 1 - phase) * 0.55;
-        const hue = 205 + phase * 45;
+        const alpha = Math.max(0, 1 - phase) * 0.6;
         ctx.beginPath();
         ctx.ellipse(cx, cy, r, r * 0.94, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = `hsla(${hue}, 90%, ${58 + phase * 22}%, ${alpha})`;
+        ctx.strokeStyle = `rgba(${strokeRGB}, ${alpha})`;
         ctx.lineWidth = 1;
         ctx.stroke();
       }
@@ -147,8 +152,8 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         const x2 = cx + Math.cos(angle) * maxR;
         const y2 = cy + Math.sin(angle) * maxR * 0.94;
         const grad = ctx.createLinearGradient(cx, cy, x2, y2);
-        grad.addColorStop(0, "rgba(129,140,248,0.32)");
-        grad.addColorStop(1, "rgba(56,189,248,0)");
+        grad.addColorStop(0, `rgba(${strokeRGB}, 0.4)`);
+        grad.addColorStop(1, `rgba(${strokeRGB}, 0)`);
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         ctx.lineTo(x2, y2);
@@ -171,19 +176,22 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         const alpha = Math.min(1, (resetRadius - p.radius) / 90);
         ctx.beginPath();
         ctx.arc(x, y, p.size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(224,242,255,${0.55 * alpha})`;
+        ctx.fillStyle = `rgba(${particleRGB}, ${0.7 * alpha})`;
         ctx.fill();
       });
     }
 
     function drawCore() {
-      const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 48);
+      // The one accretion-disk-blue accent in an otherwise neutral tunnel,
+      // at the vanishing point -- ties this to the rest of the site.
+      const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 52);
       core.addColorStop(0, "#05070f");
-      core.addColorStop(0.55, "rgba(30,40,90,0.85)");
-      core.addColorStop(1, "rgba(30,40,90,0)");
+      core.addColorStop(0.5, "rgba(37, 99, 235, 0.9)");
+      core.addColorStop(0.8, "rgba(56, 189, 248, 0.5)");
+      core.addColorStop(1, "rgba(56, 189, 248, 0)");
       ctx.fillStyle = core;
       ctx.beginPath();
-      ctx.arc(cx, cy, 48, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 52, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -230,9 +238,15 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
   });
 
   // ---------------------------------------------------------------------
-  // Dashboard singularity background: a rotating accretion-disk glow with
-  // a mouse-reactive core, layered warp bands for a less static, more
-  // "alive" field than a flat gradient, plus a sparse twinkling starfield.
+  // Dashboard singularity background: a full-viewport, continuously
+  // warping plasma field (a classic multi-sine-wave technique, rendered
+  // at low resolution and scaled up for a soft, shader-like look without
+  // needing WebGL), mouse-reactive, plus a twinkling starfield on top.
+  // Meant to be unmistakably animated -- an earlier, subtler version
+  // (a couple of faint rotating gradients) was so faint it read as
+  // "not there" rather than "animated but understated," so this trades
+  // subtlety for being clearly, immediately visible, while staying dark
+  // enough that the glass panels on top of it keep their own contrast.
   // ---------------------------------------------------------------------
   safe(function initSingularityBackground() {
     const canvas = document.getElementById("bg-canvas");
@@ -241,8 +255,35 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     let w, h, dpr;
     let stars = [];
     let t = 0;
-    let mouseX = 0.5, mouseY = 0.2; // fractional position, damped toward actual mouse
+    let mouseX = 0.5, mouseY = 0.35; // fractional position, damped toward actual mouse
     let targetMouseX = mouseX, targetMouseY = mouseY;
+
+    // Low-res plasma buffer, scaled up to fill the screen -- this is what
+    // makes a per-pixel animated field affordable every frame.
+    const BUFFER_W = 128;
+    let bufferH = 72;
+    const plasmaCanvas = document.createElement("canvas");
+    const plasmaCtx = plasmaCanvas.getContext("2d", { willReadFrequently: true });
+    let imageData = null;
+
+    const hueBase = 222; // blue, matching the site's accretion-disk accent
+    const speed = 1;
+    const mouseSensitivity = 1.1;
+
+    function hslToRgb(h360, s, l) {
+      const c = (1 - Math.abs(2 * l - 1)) * s;
+      const hp = (h360 % 360) / 60;
+      const x = c * (1 - Math.abs((hp % 2) - 1));
+      let r = 0, g = 0, b = 0;
+      if (hp < 1) { r = c; g = x; }
+      else if (hp < 2) { r = x; g = c; }
+      else if (hp < 3) { g = c; b = x; }
+      else if (hp < 4) { g = x; b = c; }
+      else if (hp < 5) { r = x; b = c; }
+      else { r = c; b = x; }
+      const m = l - c / 2;
+      return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+    }
 
     function resize() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -253,7 +294,13 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       canvas.style.width = w + "px";
       canvas.style.height = h + "px";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const count = Math.min(160, Math.floor((w * h) / 9000));
+
+      bufferH = Math.max(48, Math.round((BUFFER_W * h) / w));
+      plasmaCanvas.width = BUFFER_W;
+      plasmaCanvas.height = bufferH;
+      imageData = plasmaCtx.createImageData(BUFFER_W, bufferH);
+
+      const count = Math.min(140, Math.floor((w * h) / 11000));
       stars = Array.from({ length: count }, () => ({
         x: Math.random() * w,
         y: Math.random() * h,
@@ -268,69 +315,48 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       targetMouseY = e.clientY / window.innerHeight;
     });
 
-    const baseCx = () => w * 0.82;
-    const baseCy = () => h * -0.05;
+    function drawPlasma() {
+      mouseX += (targetMouseX - mouseX) * 0.015;
+      mouseY += (targetMouseY - mouseY) * 0.015;
+      const mx = 0.5 + (mouseX - 0.5) * mouseSensitivity;
+      const my = 0.5 + (mouseY - 0.5) * mouseSensitivity;
 
-    function drawDisk() {
-      // The core drifts a little toward the cursor (damped), echoing the
-      // referenced shader's mouseSensitivity without needing WebGL.
-      mouseX += (targetMouseX - mouseX) * 0.02;
-      mouseY += (targetMouseY - mouseY) * 0.02;
-      const drift = 70;
-      const centerX = baseCx() + (mouseX - 0.82) * drift;
-      const centerY = baseCy() + (mouseY - 0.1) * drift;
+      const data = imageData.data;
+      for (let y = 0; y < bufferH; y++) {
+        const ny = y / bufferH;
+        for (let x = 0; x < BUFFER_W; x++) {
+          const nx = x / BUFFER_W;
+          const dx = nx - mx;
+          const dy = ny - my;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const value =
+            Math.sin(nx * 5.5 + t) +
+            Math.sin(ny * 5.0 - t * 0.85) +
+            Math.sin((nx + ny) * 4.5 + t * 1.2) +
+            Math.sin(dist * 9.0 - t * 2.1);
 
-      const rings = 3;
-      for (let i = 0; i < rings; i++) {
-        const radius = 260 + i * 150;
-        const grad = ctx.createRadialGradient(centerX, centerY, radius * 0.15, centerX, centerY, radius);
-        const angleShift = t * (0.05 + i * 0.02);
-        grad.addColorStop(0, "rgba(129, 140, 248, 0.10)");
-        grad.addColorStop(0.4, `rgba(56, 189, 248, ${0.07 - i * 0.015})`);
-        grad.addColorStop(1, "rgba(5, 6, 15, 0)");
-        ctx.save();
-        ctx.translate(centerX, centerY);
-        ctx.rotate(angleShift);
-        ctx.translate(-centerX, -centerY);
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+          const hue = (hueBase + value * 26 + t * 4) % 360;
+          const lightness = 0.05 + (Math.sin(value) * 0.5 + 0.5) * 0.085;
+          const [r, g, b] = hslToRgb(hue < 0 ? hue + 360 : hue, 0.75, lightness);
+
+          const idx = (y * BUFFER_W + x) * 4;
+          data[idx] = r;
+          data[idx + 1] = g;
+          data[idx + 2] = b;
+          data[idx + 3] = 255;
+        }
       }
+      plasmaCtx.putImageData(imageData, 0, 0);
 
-      // Warp bands: a couple of large, slowly counter-rotating soft bands
-      // beneath the rings, for a less static "flowing field" feel.
-      for (let i = 0; i < 2; i++) {
-        const radius = Math.max(w, h) * (0.5 + i * 0.25);
-        const grad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
-        const hue = i === 0 ? "99, 102, 241" : "34, 211, 238";
-        grad.addColorStop(0, `rgba(${hue}, 0)`);
-        grad.addColorStop(0.7, `rgba(${hue}, ${0.02 + i * 0.01})`);
-        grad.addColorStop(1, `rgba(${hue}, 0)`);
-        ctx.save();
-        ctx.translate(centerX, centerY);
-        ctx.rotate(t * (i === 0 ? -0.015 : 0.01));
-        ctx.translate(-centerX, -centerY);
-        ctx.fillStyle = grad;
-        ctx.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
-        ctx.restore();
-      }
-
-      const core = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 90);
-      core.addColorStop(0, "rgba(224, 242, 255, 0.35)");
-      core.addColorStop(1, "rgba(224, 242, 255, 0)");
-      ctx.fillStyle = core;
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, 90, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(plasmaCanvas, 0, 0, BUFFER_W, bufferH, 0, 0, w, h);
     }
 
     function drawStars() {
       for (const s of stars) {
         const twinkle = 0.4 + 0.6 * Math.abs(Math.sin(t * s.speed + s.phase));
-        ctx.globalAlpha = twinkle * 0.7;
-        ctx.fillStyle = "#dbeafe";
+        ctx.globalAlpha = twinkle * 0.8;
+        ctx.fillStyle = "#f2f6ff";
         ctx.beginPath();
         ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
         ctx.fill();
@@ -338,11 +364,15 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       ctx.globalAlpha = 1;
     }
 
+    let firstFrameLogged = false;
     function frame() {
-      ctx.clearRect(0, 0, w, h);
-      drawDisk();
+      drawPlasma();
       drawStars();
-      t += 0.006;
+      t += 0.012 * speed;
+      if (!firstFrameLogged) {
+        firstFrameLogged = true;
+        console.info("[effects] singularity background is running");
+      }
       requestAnimationFrame(frame);
     }
 
