@@ -72,11 +72,95 @@ body.landing-active {
      inline, then removes the element from layout entirely on finish */
 }
 
+/* Ported from the actual "Black Hole Background" component: the canvas
+   itself only ever draws a neutral gray wireframe + white particles at low
+   opacity (structure only) -- all the color comes from these CSS layers
+   blended on top, which is why a from-scratch reconstruction that tried to
+   color the canvas directly never looked right. */
+#blackhole-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* Purely decorative -- its children's z-index (3/5/7) would otherwise
+     paint on top of and intercept clicks meant for .landing-content, since
+     this element has no z-index of its own and so doesn't box them into
+     their own stacking context. */
+  pointer-events: none;
+}
+#blackhole-bg::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: block;
+  width: 140%;
+  height: 140%;
+  transform: translate3d(-50%, -50%, 0);
+  background: radial-gradient(ellipse at 50% 55%, transparent 10%, #000 50%);
+}
+#blackhole-bg::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  display: block;
+  width: 100%;
+  height: 100%;
+  mix-blend-mode: overlay;
+  transform: translate3d(-50%, -50%, 0);
+  background: radial-gradient(ellipse at 50% 75%, #a900ff 20%, transparent 75%);
+}
+
 #blackhole-canvas {
   position: absolute;
   inset: 0;
+  display: block;
   width: 100%;
   height: 100%;
+  opacity: 0.2;
+}
+
+/* The colorful "accretion" band -- a blurred gradient strip that slides
+   through cyan/amber/pink forever, blended additively over the wireframe. */
+#blackhole-flare {
+  position: absolute;
+  left: 50%;
+  top: -71.5%;
+  z-index: 3;
+  height: 140%;
+  width: 30%;
+  border-radius: 0 0 999px 999px;
+  opacity: 0.75;
+  mix-blend-mode: plus-lighter;
+  filter: blur(64px);
+  transform: translate3d(-50%, 0, 0);
+  background: linear-gradient(
+      20deg,
+      #00f8f1,
+      #ffbd1e33 16.5%,
+      #fe848f 33%,
+      #fe848f33 49.5%,
+      #00f8f1 66%,
+      #00f8f199 85.5%,
+      #ffbd1e 100%
+    )
+    0 100% / 100% 200%;
+  animation: blackhole-flare-flow 5s linear infinite;
+}
+@keyframes blackhole-flare-flow {
+  from { background-position: 0 100%; }
+  to { background-position: 0 300%; }
+}
+
+/* A faint scanline texture, matched to the reference's CRT-like overlay. */
+#blackhole-scanlines {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  opacity: 0.5;
+  mix-blend-mode: overlay;
+  background: repeating-linear-gradient(transparent, transparent 1px, #fff 1px, #fff 2px);
 }
 
 /* A brief white/blue flash at the moment of "entry" -- the payoff beat of
