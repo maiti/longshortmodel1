@@ -79,15 +79,16 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
   }
 
   // ---------------------------------------------------------------------
-  // Black hole intro: a warping tunnel of concentric discs, radial lines,
-  // and inward-flowing particles on the landing screen. Matches the
-  // referenced component's own defaults (neutral gray stroke, white
-  // particles, 50 lines, 50 discs) rather than the site's blue accent, so
-  // it reads as "the black hole background" rather than a loose homage --
-  // the blue shows up at the very core instead, as the one accretion-disk
-  // accent tying it to the rest of the site. Clicking "Enter" accelerates
-  // everything and zooms into the core before the dashboard is revealed
-  // underneath -- an "entering the singularity" beat, not a plain fade.
+  // Black hole intro: a warping funnel of concentric discs, radial lines,
+  // and inward-flowing particles on the landing screen, matched against a
+  // reference screenshot of the actual component -- a shallow, flattened
+  // vortex sitting low in the frame (not centered), with a teal outer edge
+  // sliding through blue/purple into a magenta glowing core, and square
+  // particles rather than round ones. The animation clock runs on real
+  // elapsed time (delta-time), not a fixed per-frame increment, so motion
+  // stays smooth regardless of actual frame rate. Clicking "Enter"
+  // accelerates everything with an eased (not power-law) ramp and zooms
+  // into the core before the dashboard is revealed underneath.
   // ---------------------------------------------------------------------
   safe(function initBlackHoleIntro() {
     const canvas = document.getElementById("blackhole-canvas");
@@ -95,15 +96,19 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     const ctx = canvas.getContext("2d");
     let w, h, dpr, cx, cy;
     let rafId = null;
-    let t = 0;
+    let t = 0; // seconds, advanced by real delta-time each frame
+    let lastNow = null;
     let warping = false;
     let warpStart = 0;
 
-    const strokeRGB = "115, 115, 115"; // #737373, the reference's default strokeColor
-    const particleRGB = "255, 255, 255"; // the reference's default particleRGBColor
+    const particleRGB = "255, 255, 255";
     const numDiscs = 50;
     const numLines = 50;
     const numParticles = 140;
+    const SQUASH = 0.32; // shallow, flattened perspective, not near-circular
+    const CENTER_Y_FRAC = 0.62; // funnel throat sits low in the frame
+    const HUE_CORE = 305; // magenta, near the center
+    const HUE_EDGE = 185; // teal, at the outer edge
 
     function resize() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -115,7 +120,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       canvas.style.height = h + "px";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       cx = w / 2;
-      cy = h / 2;
+      cy = h * CENTER_Y_FRAC;
     }
     resize();
     window.addEventListener("resize", () => safe(resize));
@@ -123,22 +128,26 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     function spawnParticle() {
       return {
         angle: Math.random() * Math.PI * 2,
-        radius: Math.random() * Math.max(w, h) * 0.6 + 60,
+        radius: Math.random() * Math.max(w, h) * 0.7 + 60,
         speed: 0.5 + Math.random() * 1.1,
-        size: 0.6 + Math.random() * 1.6,
+        size: 1.4 + Math.random() * 2.6,
       };
     }
     const particles = Array.from({ length: numParticles }, spawnParticle);
 
+    function hueForPhase(phase) {
+      return HUE_CORE + (HUE_EDGE - HUE_CORE) * phase;
+    }
+
     function drawDiscs(speedMult) {
       const maxR = Math.hypot(w, h) * 0.62;
       for (let i = 0; i < numDiscs; i++) {
-        const phase = ((i / numDiscs + t * 0.0022 * speedMult) % 1 + 1) % 1;
+        const phase = ((i / numDiscs + t * 2.2 * speedMult) % 1 + 1) % 1;
         const r = phase * maxR;
-        const alpha = Math.max(0, 1 - phase) * 0.6;
+        const alpha = Math.max(0, 1 - phase) * 0.65;
         ctx.beginPath();
-        ctx.ellipse(cx, cy, r, r * 0.94, 0, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(${strokeRGB}, ${alpha})`;
+        ctx.ellipse(cx, cy, r, r * SQUASH, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = `hsla(${hueForPhase(phase)}, 85%, 62%, ${alpha})`;
         ctx.lineWidth = 1;
         ctx.stroke();
       }
@@ -146,14 +155,15 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
 
     function drawLines(speedMult) {
       const maxR = Math.hypot(w, h) * 0.72;
-      const rotation = t * 0.0015 * speedMult;
+      const rotation = t * 1.5 * speedMult;
       for (let i = 0; i < numLines; i++) {
         const angle = (i / numLines) * Math.PI * 2 + rotation;
         const x2 = cx + Math.cos(angle) * maxR;
-        const y2 = cy + Math.sin(angle) * maxR * 0.94;
+        const y2 = cy + Math.sin(angle) * maxR * SQUASH;
+        const edgeHue = HUE_EDGE;
         const grad = ctx.createLinearGradient(cx, cy, x2, y2);
-        grad.addColorStop(0, `rgba(${strokeRGB}, 0.4)`);
-        grad.addColorStop(1, `rgba(${strokeRGB}, 0)`);
+        grad.addColorStop(0, `hsla(${HUE_CORE}, 90%, 65%, 0.45)`);
+        grad.addColorStop(1, `hsla(${edgeHue}, 85%, 60%, 0)`);
         ctx.beginPath();
         ctx.moveTo(cx, cy);
         ctx.lineTo(x2, y2);
@@ -163,63 +173,65 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       }
     }
 
-    function drawParticles(speedMult) {
-      const resetRadius = Math.max(w, h) * 0.65;
+    function drawParticles(speedMult, dtFrames) {
+      const resetRadius = Math.max(w, h) * 0.75;
       particles.forEach((p) => {
-        p.radius -= p.speed * speedMult;
+        p.radius -= p.speed * speedMult * dtFrames;
         if (p.radius < 4) {
           Object.assign(p, spawnParticle());
           p.radius = resetRadius;
         }
         const x = cx + Math.cos(p.angle) * p.radius;
-        const y = cy + Math.sin(p.angle) * p.radius * 0.94;
-        const alpha = Math.min(1, (resetRadius - p.radius) / 90);
-        ctx.beginPath();
-        ctx.arc(x, y, p.size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${particleRGB}, ${0.7 * alpha})`;
-        ctx.fill();
+        const y = cy + Math.sin(p.angle) * p.radius * SQUASH;
+        const alpha = Math.min(1, (resetRadius - p.radius) / 120);
+        ctx.fillStyle = `rgba(${particleRGB}, ${0.75 * alpha})`;
+        ctx.fillRect(x - p.size / 2, y - p.size / 2, p.size, p.size);
       });
     }
 
     function drawCore() {
-      // The one accretion-disk-blue accent in an otherwise neutral tunnel,
-      // at the vanishing point -- ties this to the rest of the site.
-      const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 52);
-      core.addColorStop(0, "#05070f");
-      core.addColorStop(0.5, "rgba(37, 99, 235, 0.9)");
-      core.addColorStop(0.8, "rgba(56, 189, 248, 0.5)");
-      core.addColorStop(1, "rgba(56, 189, 248, 0)");
+      // Bright bloom at the vanishing point -- white-hot center fading
+      // through magenta/purple, blended additively so it actually glows
+      // against the discs and lines behind it.
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 95);
+      core.addColorStop(0, "rgba(255, 255, 255, 0.95)");
+      core.addColorStop(0.22, "rgba(255, 140, 220, 0.85)");
+      core.addColorStop(0.5, "rgba(190, 60, 220, 0.5)");
+      core.addColorStop(1, "rgba(120, 20, 160, 0)");
       ctx.fillStyle = core;
       ctx.beginPath();
-      ctx.arc(cx, cy, 52, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 95, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
     }
 
     function frame(now) {
       try {
+        if (lastNow === null) lastNow = now;
+        const dt = Math.min((now - lastNow) / 1000, 0.05); // clamp long tab-switch gaps
+        lastNow = now;
+
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, w, h);
 
         let speedMult = 1;
         if (warping) {
-          // Clamped to >= 0: the already-scheduled rAF callback firing
-          // this frame can carry a timestamp from just before the
-          // synchronous click handler set warpStart, which would
-          // otherwise make elapsed briefly negative -- and
-          // Math.pow(negative, 2.2) is NaN in JS.
           const elapsed = Math.max(0, now - warpStart);
           const p = Math.min(elapsed / 900, 1);
-          speedMult = 1 + Math.pow(elapsed / 90, 2.2);
-          canvas.style.transform = `scale(${1 + p * 2.6})`;
-          canvas.style.filter = `blur(${p * 3}px)`;
+          const eased = 1 - Math.pow(1 - p, 3); // ease-out cubic, not a power ramp
+          speedMult = 1 + eased * 14;
+          canvas.style.transform = `scale(${1 + eased * 2.6})`;
+          canvas.style.filter = `blur(${eased * 3}px)`;
         }
 
+        t += dt;
         drawLines(speedMult);
         drawDiscs(speedMult);
-        drawParticles(speedMult * 4);
+        drawParticles(speedMult * 4, dt * 60);
         drawCore();
 
-        t += 16; // roughly ms-per-frame at 60fps, used as the animation clock
         rafId = requestAnimationFrame(frame);
       } catch (e) {
         // A purely decorative animation must never keep erroring every
