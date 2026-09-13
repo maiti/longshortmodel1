@@ -148,7 +148,11 @@ by copying a result.
 ## Running it
 
 ```bash
-pip install -r requirements.txt
+# requirements.txt alone (fastapi/pandas/numpy/scipy) is enough to import
+# and run the model and API; requirements-dev.txt adds local-only tools
+# (uvicorn to serve it, matplotlib for the CLI's PNG, yfinance for real
+# data, pyarrow for the disk cache, pytest). Install both for local dev:
+pip install -r requirements.txt -r requirements-dev.txt
 
 # CLI: prints a full report, writes results/results.json + results/equity_curve.png
 python scripts/run_model.py
@@ -199,22 +203,41 @@ A couple of things worth knowing about the deployed version specifically:
   needs no outbound network call.
 - **`yfinance` is intentionally not installed in the deployed function**
   (see `api/requirements.txt`, which is deliberately trimmed to
-  fastapi/pandas/numpy/scipy). Selecting it in the UI in production fails
-  with a clear "No module named 'yfinance'" error rather than working —
-  this was a deliberate trade-off to keep the deployed bundle small and
-  the build reliable, since yfinance pulls in a fair number of transitive
+  fastapi/pandas/numpy). Selecting it in the UI in production fails with
+  a clear "No module named 'yfinance'" error rather than working — this
+  was a deliberate trade-off to keep the deployed bundle small and the
+  build reliable, since yfinance pulls in a fair number of transitive
   dependencies for a feature that's slow to use from a 10-second
   serverless function anyway. To enable it, add `yfinance` (and raise
   `functions."api/index.py".maxDuration` in `vercel.json` — Hobby plans
   cap lower than Pro) yourself.
-- **scipy is a real runtime dependency, not an unused one**: pandas'
-  `Series.corr(method="spearman")`, used in the Information Coefficient
-  calculation, imports `scipy.stats` internally and raises
-  `ModuleNotFoundError` at request time (not at import time) if it's
-  missing — a `grep` for `import scipy` across this codebase will find
-  nothing, which is exactly what makes this easy to remove by mistake
-  thinking it's dead weight. If you ever see `/api/run` failing in
-  production with that error, this is why.
+- **`requirements.txt` at the project root is what Vercel's build actually
+  installs for the function** — a build log confirmed this directly
+  ("Installing required dependencies from requirements.txt"). Two real
+  incidents shaped how it looks now, both worth knowing if you touch it:
+    1. It briefly held the full local-dev dependency set (pyarrow, scipy,
+       matplotlib, `uvicorn[standard]`, yfinance, pytest, httpx), which
+       produced a **518MB function bundle against Vercel's 500MB limit**
+       — pandas, numpy, and especially scipy (~140MB on its own, mostly a
+       bundled BLAS/LAPACK) dominate that. Every local-only tool now
+       lives in `requirements-dev.txt` instead (see "Running it" above);
+       `requirements.txt` holds only what the deployed function actually
+       imports.
+    2. scipy itself is now gone entirely, not just moved to
+       `requirements-dev.txt`: it was only ever there as pandas'
+       *internal* dependency for `Series.corr(method="spearman")` (used
+       in the Information Coefficient calculation) — a `grep` for
+       `import scipy` across this codebase finds nothing, which is
+       exactly what made it look safe to remove the first time and broke
+       every `/api/run` call in production when that happened. Spearman's
+       rank correlation is, by definition, the Pearson correlation of the
+       two variables' ranks, so `quant/validation.py` now computes it as
+       `.rank().corr(...)` instead of `.corr(method="spearman")` —
+       identical numbers, no scipy import anywhere, ~140MB lighter.
+  `api/requirements.txt` is kept identical to the root file in case a
+  future Vercel Python runtime version does honor a function-scoped
+  requirements.txt over the root one — harmless either way since the two
+  files never disagree.
 - **No disk cache in production.** Vercel's filesystem is read-only
   outside `/tmp`, and `/tmp` doesn't persist across cold starts, so
   `webapp/api_app.py` disables the parquet cache entirely when it detects

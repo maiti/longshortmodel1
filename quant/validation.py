@@ -74,7 +74,15 @@ def information_coefficient(
             aligned.columns = ["score", "forward_return"]
             if len(aligned) < 10:
                 continue
-            ic = aligned["score"].corr(aligned["forward_return"], method="spearman")
+            # Spearman's rank correlation is, by definition, the Pearson
+            # correlation of the two variables' ranks. Computing it this
+            # way (rather than pandas' .corr(method="spearman")) avoids a
+            # hard runtime dependency on scipy, which pandas imports
+            # internally only for the spearman/kendall methods -- scipy
+            # bundles a ~140MB compiled BLAS/LAPACK payload that is a poor
+            # trade for one rank correlation, especially in a deployment
+            # with a bundle size budget (see README).
+            ic = aligned["score"].rank().corr(aligned["forward_return"].rank())
             if not np.isnan(ic):
                 ic_values.append(ic)
 

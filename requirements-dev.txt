@@ -1,0 +1,19 @@
+# Local development extras on top of the core runtime deps in
+# requirements.txt (the file Vercel's build actually installs for the
+# deployed function -- see api/requirements.txt and README's "Deploying
+# to Vercel" section for why it must stay minimal: having pyarrow,
+# matplotlib, uvicorn[standard], yfinance and pytest there too, plus a
+# scipy dependency later eliminated entirely (see quant/validation.py),
+# pushed a previous deploy's bundle to 518MB, over Vercel's 500MB
+# function limit).
+#
+# Install everything needed for local development with:
+#   pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+
+uvicorn[standard]>=0.29   # run the local dev server (webapp/server.py)
+matplotlib>=3.8            # scripts/run_model.py's equity_curve.png
+yfinance>=0.2.40           # real market data (quant/data.py's yfinance provider)
+pyarrow>=14.0               # local disk cache for repeated runs (quant/data.py)
+pytest>=8.0
+httpx>=0.27                 # FastAPI test client, used by future API tests
