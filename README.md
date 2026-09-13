@@ -223,10 +223,30 @@ A couple of things worth knowing about the deployed version specifically:
        which matters far more for a slow real-data fetch than for the
        ~1-3s synthetic path it was originally reasoned about.
   Bundle size headroom is fine with both back in: fastapi + pandas +
-  numpy + yfinance + pyarrow installs to ~358MB, comfortably under
+  numpy + yfinance + pyarrow installs to ~400MB, comfortably under
   Vercel's 500MB limit even without scipy's removal — that removal
   stands on its own merits (see below) rather than being needed to make
   room for this.
+- **`yfinance` is intentionally NOT pinned to an exact version, unlike
+  everything else in `requirements.txt`.** The first attempt at enabling
+  it in production pinned `yfinance==0.2.51` and failed every single
+  download with "No price data was successfully downloaded for any
+  ticker" — no parsing bug, no network block, just a stale package
+  version: yfinance wraps an undocumented Yahoo Finance API that changes
+  without notice, and there had been a compatibility-breaking rewrite
+  (0.2.x → 1.x, adding `curl_cffi`-based request signing to get past
+  Yahoo's current bot detection) since that version. `yfinance>=1.7.0`
+  lets it resolve to whatever's current on each fresh Vercel build (no
+  lockfile, so this does refetch from PyPI every deploy) instead of
+  slowly rotting behind a pin. `quant/data.py`'s `fetch_yfinance_data`
+  also no longer assumes a single-ticker download is a flat (non-nested)
+  DataFrame based on batch size — it checks the actual column structure,
+  since that default (`multi_level_index`) is exactly the kind of thing
+  that changed between those versions too — and any download failure now
+  includes a sample of the actual underlying error in the message the UI
+  shows, rather than only the generic "no ticker succeeded" summary,
+  precisely so the *next* Yahoo-side change is diagnosable from the
+  browser instead of needing another round of Vercel function logs.
 - **`requirements.txt` at the project root is what Vercel's build actually
   installs for the function** — a build log confirmed this directly
   ("Installing required dependencies from requirements.txt"). Two real

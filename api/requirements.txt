@@ -1,5 +1,5 @@
 fastapi==0.115.6
 pandas==2.2.3
 numpy==1.26.4
-yfinance==0.2.51
+yfinance>=1.7.0
 pyarrow==17.0.0

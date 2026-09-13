@@ -1,5 +1,13 @@
 fastapi==0.115.6
 pandas==2.2.3
 numpy==1.26.4
-yfinance==0.2.51
+# Not pinned like the rest, deliberately: yfinance wraps an undocumented,
+# unversioned Yahoo Finance API that changes without notice, and 0.x -> 1.x
+# was a compatibility-breaking rewrite in response to exactly that. Pinning
+# it here previously (to 0.2.51) meant every deploy kept reinstalling a
+# version that could no longer authenticate with Yahoo at all, failing
+# every download silently. Letting it float to whatever's current on each
+# fresh build (Vercel's build has no lockfile, so this does resolve fresh
+# every deploy) trades reproducibility for actually working.
+yfinance>=1.7.0
 pyarrow==17.0.0

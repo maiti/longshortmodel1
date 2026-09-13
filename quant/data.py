@@ -243,6 +243,13 @@ def fetch_yfinance_data(
     price_series: dict[str, pd.Series] = {}
     volume_series: dict[str, pd.Series] = {}
     still_missing = list(tickers)
+    # Sampled, deduplicated exception messages, surfaced in the error below
+    # if every ticker fails -- without this, a systemic failure (Yahoo
+    # rate-limiting this IP, an auth/cookie change, a yfinance/Yahoo
+    # incompatibility) is indistinguishable from "no data for any of these
+    # 94 tickers," and the only way to see the real cause is to go find
+    # server-side logs instead of just reading the error the UI shows.
+    errors_seen: dict[str, None] = {}
 
     for attempt in range(max_retries + 1):
         if not still_missing:
@@ -258,13 +265,28 @@ def fetch_yfinance_data(
                 )
             except Exception as exc:
                 logger.warning("Batch download failed (%s): %s", batch, exc)
+                errors_seen[f"{type(exc).__name__}: {exc}"] = None
                 newly_missing.extend(batch)
                 continue
 
+            if raw is None or raw.empty:
+                errors_seen["yf.download returned no data (empty response)"] = None
+                newly_missing.extend(batch)
+                continue
+
+            # With group_by="ticker", yfinance nests columns as
+            # (ticker, field) -- but whether a *single*-ticker batch comes
+            # back with that same MultiIndex or a flat (field-only) column
+            # index has changed across yfinance versions (multi_level_index
+            # became default-True at some point). Check the actual
+            # DataFrame instead of assuming based on len(batch), so this
+            # doesn't silently break again the next time that default
+            # changes.
+            is_multi_index = isinstance(raw.columns, pd.MultiIndex)
             for ticker in batch:
                 try:
-                    close = raw[ticker]["Close"] if len(batch) > 1 else raw["Close"]
-                    volume = raw[ticker]["Volume"] if len(batch) > 1 else raw["Volume"]
+                    close = raw[ticker]["Close"] if is_multi_index else raw["Close"]
+                    volume = raw[ticker]["Volume"] if is_multi_index else raw["Volume"]
                     if close.dropna().empty:
                         newly_missing.append(ticker)
                         continue
@@ -278,7 +300,9 @@ def fetch_yfinance_data(
     for ticker in still_missing:
         logger.warning("No data available for %s after retries, dropping it", ticker)
     if not price_series:
-        raise RuntimeError("No price data was successfully downloaded for any ticker.")
+        detail = "; ".join(list(errors_seen)[:3])
+        suffix = f" Sample error(s) seen during download: {detail}" if detail else ""
+        raise RuntimeError(f"No price data was successfully downloaded for any ticker.{suffix}")
 
     prices = pd.concat(price_series, axis=1).sort_index().dropna(how="all")
     dollar_volume = pd.concat(
