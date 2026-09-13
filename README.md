@@ -69,7 +69,8 @@ api/
   index.py           Vercel serverless entrypoint: re-exports webapp.api_app's FastAPI app
   requirements.txt   Minimal deps for the deployed function (no matplotlib/uvicorn/pytest)
 
-vercel.json         Rewrites /api/* to the one serverless function; everything else is static
+vercel.json         Rewrites everything to the one serverless function (static files under
+                    /public still win over the rewrite automatically — see the Vercel section)
 
 tests/              pytest unit tests for factors, portfolio sizing, validation, data/backtest
 ```
@@ -244,6 +245,18 @@ A couple of things worth knowing about the deployed version specifically:
   the `VERCEL` environment variable (set automatically by the platform) —
   every request regenerates or redownloads from scratch. Locally, the
   cache still works and makes repeated UI experimentation instant.
+- **The rewrite routes everything to the function, not just `/api/*`.**
+  An earlier, narrower rule (`"/api/(.*)"` → `/api/index`) 404'd on every
+  API call once the build actually succeeded — Vercel's own build log
+  carries a warning that "internal rewrites in backend framework
+  projects now route requests using the rewritten destination path,"
+  which is exactly the scenario a single-file FastAPI app needs a
+  catch-all for. `vercel.json` now rewrites `"/(.*)"` to `/api/index`,
+  matching Vercel's own documented FastAPI pattern; this is safe for the
+  static frontend because Vercel checks real files under `/public`
+  *before* applying rewrites, so `/css/styles.css`, `/js/app.js`, and `/`
+  itself still resolve to their actual files rather than hitting the
+  function.
 
 ## Known limitations (same honesty standard as the original doc)
 
