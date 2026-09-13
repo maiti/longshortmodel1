@@ -238,52 +238,198 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
   });
 
   // ---------------------------------------------------------------------
-  // Dashboard singularity background: a full-viewport, continuously
-  // warping plasma field (a classic multi-sine-wave technique, rendered
-  // at low resolution and scaled up for a soft, shader-like look without
-  // needing WebGL), mouse-reactive, plus a twinkling starfield on top.
-  // Meant to be unmistakably animated -- an earlier, subtler version
-  // (a couple of faint rotating gradients) was so faint it read as
-  // "not there" rather than "animated but understated," so this trades
-  // subtlety for being clearly, immediately visible, while staying dark
-  // enough that the glass panels on top of it keep their own contrast.
+  // Dashboard singularity background: a real WebGL port of "Singularity"
+  // by @XorDev (https://www.shadertoy.com/view/3csSWB, the shader the
+  // requested component's own credits cite), not a from-scratch
+  // approximation -- the fragment shader below is that shader's actual
+  // math, adapted only for a bare WebGL1 main() instead of ShaderToy's
+  // mainImage() wrapper. hue/saturation/brightness are applied as an
+  // HSV post-process on the shader's own output (the shader has no such
+  // uniforms itself); mouseSensitivity nudges the field's center toward
+  // the cursor, damped, since the source shader doesn't read iMouse
+  // either. Falls back to a canvas2D plasma approximation if WebGL is
+  // unavailable, so there's still an animated background either way.
   // ---------------------------------------------------------------------
   safe(function initSingularityBackground() {
     const canvas = document.getElementById("bg-canvas");
     if (!canvas || !canvas.getContext) return;
-    const ctx = canvas.getContext("2d");
-    let w, h, dpr;
-    let stars = [];
-    let t = 0;
-    let mouseX = 0.5, mouseY = 0.35; // fractional position, damped toward actual mouse
-    let targetMouseX = mouseX, targetMouseY = mouseY;
 
-    // Low-res plasma buffer, scaled up to fill the screen -- this is what
-    // makes a per-pixel animated field affordable every frame.
-    const BUFFER_W = 128;
-    let bufferH = 72;
-    const plasmaCanvas = document.createElement("canvas");
-    const plasmaCtx = plasmaCanvas.getContext("2d", { willReadFrequently: true });
-    let imageData = null;
+    const HUE_DEGREES = 190; // shifts the shader's native red/blue toward the site's cyan/blue accent
+    const SATURATION = 1.05;
+    const BRIGHTNESS = 1.15;
+    const SPEED = 0.55;
+    const MOUSE_SENSITIVITY = 0.5;
+    const MOUSE_DAMPING = 0.02;
 
-    const hueBase = 222; // blue, matching the site's accretion-disk accent
-    const speed = 1;
-    const mouseSensitivity = 1.1;
-
-    function hslToRgb(h360, s, l) {
-      const c = (1 - Math.abs(2 * l - 1)) * s;
-      const hp = (h360 % 360) / 60;
-      const x = c * (1 - Math.abs((hp % 2) - 1));
-      let r = 0, g = 0, b = 0;
-      if (hp < 1) { r = c; g = x; }
-      else if (hp < 2) { r = x; g = c; }
-      else if (hp < 3) { g = c; b = x; }
-      else if (hp < 4) { g = x; b = c; }
-      else if (hp < 5) { r = x; b = c; }
-      else { r = c; b = x; }
-      const m = l - c / 2;
-      return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    if (!gl) {
+      renderFallback2D(canvas);
+      return;
     }
+
+    const VERTEX_SRC = `
+      attribute vec2 aPosition;
+      void main() {
+        gl_Position = vec4(aPosition, 0.0, 1.0);
+      }
+    `;
+
+    // "Singularity" by @XorDev -- ported verbatim from ShaderToy's
+    // mainImage(out vec4 O, vec2 F) into a WebGL1 main(), plus a small
+    // HSV post-process block appended at the end for hue/saturation/
+    // brightness, and mouseOffset feeding into `p`'s origin.
+    const FRAGMENT_SRC = `
+      precision highp float;
+      uniform vec2 iResolution;
+      uniform float iTime;
+      uniform vec2 uMouseOffset;
+      uniform float uHue;
+      uniform float uSaturation;
+      uniform float uBrightness;
+
+      vec3 rgb2hsv(vec3 c) {
+        vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+        vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+        vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+        float d = q.x - min(q.w, q.y);
+        float e = 1.0e-10;
+        return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+      }
+      vec3 hsv2rgb(vec3 c) {
+        vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+        vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+        return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+      }
+
+      void main() {
+        vec2 F = gl_FragCoord.xy;
+        float i = 0.2, a;
+        vec2 r = iResolution.xy;
+        vec2 p = ( F + F - r ) / r.y / 0.7 - uMouseOffset;
+        vec2 d = vec2(-1.0, 1.0);
+        vec2 b = p - i * d;
+        vec2 c = p * mat2(1.0, 1.0, d.x / (0.1 + i / dot(b, b)), d.y / (0.1 + i / dot(b, b)));
+        a = dot(c, c);
+        vec4 rotv = cos(0.5 * log(a) + iTime * i + vec4(0.0, 33.0, 11.0, 0.0));
+        vec2 v = c * mat2(rotv) / i;
+        vec2 w = vec2(0.0);
+
+        for (int j = 0; j < 9; j++) {
+          i += 1.0;
+          v += 0.7 * sin(v.yx * i + iTime) / i + 0.5;
+          w += 1.0 + sin(v);
+        }
+        i = length( sin(v / 0.3) * 0.4 + c * (3.0 + d) );
+        vec4 O = 1.0 - exp( -exp( c.x * vec4(0.6, -0.4, -1.0, 0.0) )
+                       / w.xyyx
+                       / ( 2.0 + i * i / 4.0 - i )
+                       / ( 0.5 + 1.0 / a )
+                       / ( 0.03 + abs( length(p) - 0.7 ) )
+                 );
+
+        vec3 hsv = rgb2hsv(clamp(O.rgb, 0.0, 1.0));
+        hsv.x = fract(hsv.x + uHue / 360.0);
+        hsv.y = clamp(hsv.y * uSaturation, 0.0, 1.0);
+        hsv.z = clamp(hsv.z * uBrightness, 0.0, 1.0);
+        gl_FragColor = vec4(hsv2rgb(hsv), 1.0);
+      }
+    `;
+
+    function compileShader(type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const info = gl.getShaderInfoLog(shader);
+        gl.deleteShader(shader);
+        throw new Error("shader compile failed: " + info);
+      }
+      return shader;
+    }
+
+    let program;
+    try {
+      const vs = compileShader(gl.VERTEX_SHADER, VERTEX_SRC);
+      const fs = compileShader(gl.FRAGMENT_SHADER, FRAGMENT_SRC);
+      program = gl.createProgram();
+      gl.attachShader(program, vs);
+      gl.attachShader(program, fs);
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        throw new Error("program link failed: " + gl.getProgramInfoLog(program));
+      }
+    } catch (e) {
+      console.warn("[effects] singularity WebGL shader failed, using 2D fallback:", e);
+      renderFallback2D(canvas);
+      return;
+    }
+
+    gl.useProgram(program);
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const aPosition = gl.getAttribLocation(program, "aPosition");
+    gl.enableVertexAttribArray(aPosition);
+    gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);
+
+    const uResolution = gl.getUniformLocation(program, "iResolution");
+    const uTime = gl.getUniformLocation(program, "iTime");
+    const uMouseOffsetLoc = gl.getUniformLocation(program, "uMouseOffset");
+    const uHueLoc = gl.getUniformLocation(program, "uHue");
+    const uSaturationLoc = gl.getUniformLocation(program, "uSaturation");
+    const uBrightnessLoc = gl.getUniformLocation(program, "uBrightness");
+    gl.uniform1f(uHueLoc, HUE_DEGREES);
+    gl.uniform1f(uSaturationLoc, SATURATION);
+    gl.uniform1f(uBrightnessLoc, BRIGHTNESS);
+
+    let w, h, dpr;
+    let mouseX = 0.5, mouseY = 0.5, targetMouseX = 0.5, targetMouseY = 0.5;
+    window.addEventListener("mousemove", (e) => {
+      targetMouseX = e.clientX / window.innerWidth;
+      targetMouseY = e.clientY / window.innerHeight;
+    });
+
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 1.5); // shader cost scales with pixel count; cap it
+      w = window.innerWidth;
+      h = window.innerHeight;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    resize();
+    window.addEventListener("resize", () => safe(resize));
+
+    const start = performance.now();
+    let firstFrameLogged = false;
+    function frame(now) {
+      mouseX += (targetMouseX - mouseX) * MOUSE_DAMPING;
+      mouseY += (targetMouseY - mouseY) * MOUSE_DAMPING;
+
+      gl.uniform2f(uResolution, canvas.width, canvas.height);
+      gl.uniform1f(uTime, ((now - start) / 1000) * SPEED);
+      gl.uniform2f(uMouseOffsetLoc, (mouseX - 0.5) * MOUSE_SENSITIVITY, (mouseY - 0.5) * MOUSE_SENSITIVITY);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+      if (!firstFrameLogged) {
+        firstFrameLogged = true;
+        console.info("[effects] singularity background (WebGL) is running");
+      }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  });
+
+  // Canvas2D fallback for the dashboard background, used only if WebGL is
+  // unavailable or the shader fails to compile/link on this device --
+  // a simpler multi-sine plasma field, not the real shader, but still a
+  // clearly-animated full-viewport background rather than nothing.
+  function renderFallback2D(canvas) {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let w, h, dpr, t = 0;
 
     function resize() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -294,92 +440,22 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       canvas.style.width = w + "px";
       canvas.style.height = h + "px";
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      bufferH = Math.max(48, Math.round((BUFFER_W * h) / w));
-      plasmaCanvas.width = BUFFER_W;
-      plasmaCanvas.height = bufferH;
-      imageData = plasmaCtx.createImageData(BUFFER_W, bufferH);
-
-      const count = Math.min(140, Math.floor((w * h) / 11000));
-      stars = Array.from({ length: count }, () => ({
-        x: Math.random() * w,
-        y: Math.random() * h,
-        r: Math.random() * 1.4 + 0.3,
-        phase: Math.random() * Math.PI * 2,
-        speed: 0.4 + Math.random() * 0.8,
-      }));
     }
+    resize();
+    window.addEventListener("resize", resize);
 
-    window.addEventListener("mousemove", (e) => {
-      targetMouseX = e.clientX / window.innerWidth;
-      targetMouseY = e.clientY / window.innerHeight;
-    });
-
-    function drawPlasma() {
-      mouseX += (targetMouseX - mouseX) * 0.015;
-      mouseY += (targetMouseY - mouseY) * 0.015;
-      const mx = 0.5 + (mouseX - 0.5) * mouseSensitivity;
-      const my = 0.5 + (mouseY - 0.5) * mouseSensitivity;
-
-      const data = imageData.data;
-      for (let y = 0; y < bufferH; y++) {
-        const ny = y / bufferH;
-        for (let x = 0; x < BUFFER_W; x++) {
-          const nx = x / BUFFER_W;
-          const dx = nx - mx;
-          const dy = ny - my;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          const value =
-            Math.sin(nx * 5.5 + t) +
-            Math.sin(ny * 5.0 - t * 0.85) +
-            Math.sin((nx + ny) * 4.5 + t * 1.2) +
-            Math.sin(dist * 9.0 - t * 2.1);
-
-          const hue = (hueBase + value * 26 + t * 4) % 360;
-          const lightness = 0.05 + (Math.sin(value) * 0.5 + 0.5) * 0.085;
-          const [r, g, b] = hslToRgb(hue < 0 ? hue + 360 : hue, 0.75, lightness);
-
-          const idx = (y * BUFFER_W + x) * 4;
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-          data[idx + 3] = 255;
-        }
-      }
-      plasmaCtx.putImageData(imageData, 0, 0);
-
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(plasmaCanvas, 0, 0, BUFFER_W, bufferH, 0, 0, w, h);
-    }
-
-    function drawStars() {
-      for (const s of stars) {
-        const twinkle = 0.4 + 0.6 * Math.abs(Math.sin(t * s.speed + s.phase));
-        ctx.globalAlpha = twinkle * 0.8;
-        ctx.fillStyle = "#f2f6ff";
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-    }
-
-    let firstFrameLogged = false;
     function frame() {
-      drawPlasma();
-      drawStars();
-      t += 0.012 * speed;
-      if (!firstFrameLogged) {
-        firstFrameLogged = true;
-        console.info("[effects] singularity background is running");
-      }
+      const grad = ctx.createRadialGradient(w * 0.5, h * 0.4, 0, w * 0.5, h * 0.4, Math.max(w, h) * 0.7);
+      const hue = (200 + Math.sin(t) * 30 + 360) % 360;
+      grad.addColorStop(0, `hsla(${hue}, 70%, 18%, 1)`);
+      grad.addColorStop(1, "rgba(5,6,15,1)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+      t += 0.01;
       requestAnimationFrame(frame);
     }
-
-    resize();
-    window.addEventListener("resize", () => safe(resize));
     requestAnimationFrame(frame);
-  });
+  }
 
   // ---------------------------------------------------------------------
   // Cursor trail: a short-lived glowing particle trail following the mouse.
