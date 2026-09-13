@@ -63,7 +63,11 @@ webapp/
   config_schema.py  Plain-language + math descriptions of every tunable parameter
 
 public/             Vanilla HTML/CSS/JS frontend (Chart.js vendored, no build step) — served
-                    directly by uvicorn locally, and by Vercel's CDN in production
+                    directly by uvicorn locally, and by Vercel's CDN in production. Opens on
+                    a black-hole entrance screen (public/js/effects.js) before revealing the
+                    dashboard; its dismissal path is deliberately unwrapped from the
+                    decorative canvas code (see that file's top comment) so a cosmetic
+                    animation failure can never trap someone on the landing screen.
 
 api/
   index.py           Vercel serverless entrypoint: re-exports webapp.api_app's FastAPI app

@@ -54,6 +54,88 @@ body {
   pointer-events: none;
 }
 
+/* ---------- Landing screen: the black-hole entrance ---------- */
+body.landing-active {
+  overflow: hidden;
+}
+
+#landing-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* the exit transition animates opacity+transform via JS setting these
+     inline, then removes the element from layout entirely on finish */
+}
+
+#blackhole-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* A brief white/blue flash at the moment of "entry" -- the payoff beat of
+   flying into the hole, before the dashboard is revealed underneath. */
+#landing-flash {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, #eaf6ff 0%, #7dd3fc 35%, transparent 70%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.landing-content {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  max-width: 560px;
+  padding: 0 24px;
+}
+
+.landing-title {
+  font-size: clamp(24px, 4vw, 38px);
+  font-weight: 800;
+  margin: 0 0 12px;
+  background: linear-gradient(90deg, #f4f6ff 0%, var(--accent) 55%, var(--accent-2) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  letter-spacing: 0.01em;
+}
+
+.landing-subtitle {
+  color: var(--text-muted);
+  font-size: 15px;
+  margin: 0 0 34px;
+}
+
+.landing-enter {
+  width: auto;
+  display: inline-block;
+  margin: 0 auto;
+}
+.landing-enter .btn-shimmer-inner {
+  padding: 15px 34px;
+  font-size: 15px;
+}
+
+.landing-hint {
+  margin: 16px 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  opacity: 0.8;
+  animation: hint-pulse 2.2s ease-in-out infinite;
+}
+@keyframes hint-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.95; }
+}
+
 /* ---------- Header ---------- */
 .app-header {
   background: rgba(8, 10, 22, 0.55);
