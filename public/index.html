@@ -51,6 +51,23 @@
     </aside>
 
     <main class="content-panel">
+    <div class="tracing-beam" id="tracing-beam">
+      <div class="tracing-beam-rail" aria-hidden="true">
+        <div class="tracing-beam-dot"><span class="tracing-beam-dot-inner"></span></div>
+        <svg class="tracing-beam-svg" viewBox="0 0 20 100" width="20" height="100" aria-hidden="true">
+          <path class="tracing-beam-path-base" d="" fill="none" stroke="#9091A0" stroke-opacity="0.16"></path>
+          <path class="tracing-beam-path-gradient" d="" fill="none" stroke="url(#tracing-beam-gradient)" stroke-width="1.25"></path>
+          <defs>
+            <linearGradient id="tracing-beam-gradient" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="0" y2="0">
+              <stop stop-color="#18CCFC" stop-opacity="0"></stop>
+              <stop stop-color="#18CCFC"></stop>
+              <stop offset="0.325" stop-color="#6344F5"></stop>
+              <stop offset="1" stop-color="#AE48FF" stop-opacity="0"></stop>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <div class="tracing-beam-content" id="tracing-beam-content">
       <section id="view-overview" class="view active">
         <div class="explainer">
           <p><strong>What this is:</strong> a computer program that looks at a group of stocks every month,
@@ -143,6 +160,8 @@
 
         <div class="footnote" id="run-config-dump"></div>
       </section>
+      </div>
+    </div>
     </main>
   </div>
 

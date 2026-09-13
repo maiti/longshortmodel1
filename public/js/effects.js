@@ -18,6 +18,11 @@
 let _cancelBlackHoleAnim = null;
 let _triggerBlackHoleWarp = null;
 
+// Shared with initBlackHoleIntro's own warp timeline below -- both need the
+// same total duration so the dashboard reveal lands right as the hyperspace
+// streaks finish decelerating, not before or after.
+const WARP_DURATION_MS = 1500;
+
 function dismissLanding() {
   const overlay = document.getElementById("landing-screen");
   if (!overlay) return;
@@ -50,12 +55,10 @@ function initLanding() {
       content.style.transition = "opacity 0.3s ease";
       content.style.opacity = "0";
     }
-    const flash = document.getElementById("landing-flash");
-    if (flash) {
-      flash.style.transition = "opacity 0.5s ease-in";
-      setTimeout(() => { flash.style.opacity = "1"; }, 600);
-    }
-    setTimeout(dismissLanding, 1050);
+    // #landing-flash's opacity is driven per-frame by initBlackHoleIntro's
+    // own warp timeline now (tied to the hyperspeed streak intensity), not
+    // a fixed setTimeout here -- see the "hyperspeed" comment block below.
+    setTimeout(dismissLanding, WARP_DURATION_MS - 20);
   }
 
   enterBtn.addEventListener("click", enter);
@@ -105,6 +108,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     if (!canvas || !canvas.getContext) return;
     const ctx = canvas.getContext("2d");
     const bg = canvas.parentElement; // #blackhole-bg -- warp transform applies here
+    const flashEl = document.getElementById("landing-flash");
 
     const STROKE_COLOR = "#737373"; // the reference's own default strokeColor
     const PARTICLE_RGB = [255, 255, 255]; // the reference's own default particleRGBColor
@@ -130,6 +134,19 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       particleArea: {},
       linesCanvas: null,
     };
+
+    // Hyperspace streaks: only drawn during the click-to-enter warp, not
+    // part of the reference component. Each is a light ray radiating from
+    // the funnel's own throat (state.clip.disc, the same vanishing point
+    // the wireframe already converges to) that lengthens and brightens as
+    // the warp's speed "hump" rises, then shrinks back as it recedes --
+    // the classic Star-Wars-jump-to-lightspeed look, arriving rather than
+    // just fading into the dashboard.
+    const NUM_STREAKS = 110;
+    let streaks = Array.from({ length: NUM_STREAKS }, makeStreak);
+    function makeStreak() {
+      return { angle: Math.random() * Math.PI * 2, dist: Math.random() * 30, speedVariance: Math.random() * 700 };
+    }
 
     function linear(p) { return p; }
     function easeInExpo(p) { return p === 0 ? 0 : Math.pow(2, 10 * (p - 1)); }
@@ -326,6 +343,35 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       });
     }
 
+    function drawHyperspaceStreaks(hump, dt) {
+      if (hump <= 0.01) return;
+      const origin = state.clip.disc
+        ? { x: state.clip.disc.x, y: state.clip.disc.y }
+        : { x: state.rect.width / 2, y: state.rect.height * 0.7 };
+      const maxDist = Math.hypot(state.rect.width, state.rect.height) * 0.75;
+      const speed = hump * hump * 3200;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      streaks.forEach((s) => {
+        const prevDist = s.dist;
+        s.dist += (speed + s.speedVariance) * dt;
+        if (s.dist > maxDist) Object.assign(s, makeStreak());
+        const alpha = hump * Math.min(1, prevDist / 90);
+        if (alpha <= 0.01) return;
+        const x0 = origin.x + Math.cos(s.angle) * prevDist;
+        const y0 = origin.y + Math.sin(s.angle) * prevDist;
+        const x1 = origin.x + Math.cos(s.angle) * s.dist;
+        const y1 = origin.y + Math.sin(s.angle) * s.dist;
+        ctx.strokeStyle = `rgba(210, 235, 255, ${alpha})`;
+        ctx.lineWidth = 1 + hump * 1.6;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+
     function resize() {
       setSize();
       setDiscs();
@@ -342,13 +388,21 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         lastNow = now;
 
         let speedMult = 1;
+        let hump = 0;
         if (warping && bg) {
           const elapsed = Math.max(0, now - warpStart);
-          const p = Math.min(elapsed / 900, 1);
-          const eased = 1 - Math.pow(1 - p, 3); // ease-out cubic, not a linear/power ramp
-          speedMult = 1 + eased * 14;
-          bg.style.transform = `scale(${1 + eased * 2.6})`;
-          bg.style.filter = `blur(${eased * 3}px)`;
+          const p = Math.min(elapsed / WARP_DURATION_MS, 1);
+          // The zoom (scale/blur) rises monotonically the whole way through
+          // -- we keep diving deeper into the hole right up to the reveal.
+          // The "hump" (speed, streaks, flash) rises to a peak then recedes
+          // before p reaches 1, so motion visibly decelerates just before
+          // arrival instead of cutting off abruptly mid-rush.
+          const monotonic = p * p * (3 - 2 * p); // smoothstep
+          hump = p < 0.62 ? Math.pow(p / 0.62, 3) : p < 0.8 ? 1 : Math.max(0, 1 - Math.pow((p - 0.8) / 0.2, 2));
+          speedMult = 1 + hump * 22;
+          bg.style.transform = `scale(${1 + monotonic * 2.4})`;
+          bg.style.filter = `blur(${monotonic * 2.2}px)`;
+          if (flashEl) flashEl.style.opacity = String(Math.pow(hump, 1.6) * 0.95);
         }
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -359,6 +413,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         drawDiscs();
         drawLines();
         drawParticles();
+        if (warping) drawHyperspaceStreaks(hump, dt);
         ctx.restore();
 
         rafId = requestAnimationFrame(frame);
@@ -599,9 +654,19 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
   }
 
   // ---------------------------------------------------------------------
-  // Cursor trail: a short-lived glowing particle trail following the mouse.
+  // Cursor particles: spawned at the pointer, they drift briefly and then
+  // get pulled toward the singularity's screen position with continuously
+  // increasing force -- gently at first, then visibly rushed in as each
+  // particle nears the end of its ~1s life -- rather than just fading in
+  // place. The pull direction is recomputed every frame from the particle's
+  // current position (true "gravity", not a frozen initial heading) and
+  // rotated by a fixed angle so particles curve inward on a spiral instead
+  // of flying a straight line, echoing the black hole's own rotation. Color
+  // shifts from the dashboard shader's own bright cyan core hue toward its
+  // deeper blue-violet as each particle ages, so the trail reads as part of
+  // the same singularity rather than a generic, unrelated cursor effect.
   // ---------------------------------------------------------------------
-  safe(function initCursorTrail() {
+  safe(function initCursorParticles() {
     const canvas = document.getElementById("cursor-canvas");
     if (!canvas || !canvas.getContext || window.matchMedia("(pointer: coarse)").matches) {
       // Skip entirely on touch devices -- there is no hover cursor to trail.
@@ -610,6 +675,11 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     const ctx = canvas.getContext("2d");
     let w, h, dpr;
     let particles = [];
+    let lastNow = null;
+
+    const LIFETIME_MS = 1000;
+    const PULL_STRENGTH = 2600; // px/s^2 at full pull, reached only at end of life
+    const SPIRAL_ANGLE = 0.5; // radians the pull direction is rotated by, for an inward spiral
 
     function resize() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -624,32 +694,178 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     resize();
     window.addEventListener("resize", () => safe(resize));
 
-    const colors = ["56,189,248", "129,140,248", "34,211,238"];
+    // The dashboard's WebGL singularity is centered on the viewport; reused
+    // here even before the dashboard is visible (e.g. behind the landing
+    // screen) since it's still a reasonable, stable point of "gravity" for
+    // the page as a whole.
+    function singularityTarget() {
+      return { x: w / 2, y: h / 2 };
+    }
+
     window.addEventListener("mousemove", (e) => {
-      particles.push({
-        x: e.clientX,
-        y: e.clientY,
-        r: 6 + Math.random() * 6,
-        life: 1,
-        color: colors[Math.floor(Math.random() * colors.length)],
-      });
-      if (particles.length > 80) particles.splice(0, particles.length - 80);
+      for (let i = 0; i < 3; i++) {
+        particles.push({
+          x: e.clientX + (Math.random() - 0.5) * 6,
+          y: e.clientY + (Math.random() - 0.5) * 6,
+          vx: (Math.random() - 0.5) * 24,
+          vy: (Math.random() - 0.5) * 24,
+          born: performance.now(),
+          size: 2.4 + Math.random() * 3.2,
+        });
+      }
+      if (particles.length > 320) particles.splice(0, particles.length - 320);
     });
 
-    function frame() {
+    function frame(now) {
+      if (lastNow === null) lastNow = now;
+      const dt = Math.min((now - lastNow) / 1000, 0.05);
+      lastNow = now;
+
       ctx.clearRect(0, 0, w, h);
+      const target = singularityTarget();
+      const cosA = Math.cos(SPIRAL_ANGLE);
+      const sinA = Math.sin(SPIRAL_ANGLE);
+
+      particles = particles.filter((p) => now - p.born < LIFETIME_MS);
       particles.forEach((p) => {
-        p.life -= 0.035;
-        p.r *= 0.98;
-        const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
-        grad.addColorStop(0, `rgba(${p.color}, ${Math.max(p.life, 0) * 0.5})`);
-        grad.addColorStop(1, `rgba(${p.color}, 0)`);
-        ctx.fillStyle = grad;
+        const age = (now - p.born) / LIFETIME_MS; // 0..1 over its life
+        const dx = target.x - p.x;
+        const dy = target.y - p.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const ux = dx / dist;
+        const uy = dy / dist;
+        const dirX = ux * cosA - uy * sinA;
+        const dirY = ux * sinA + uy * cosA;
+        const pull = PULL_STRENGTH * age * age; // ramps up quadratically -- drifts, then rushed in
+        p.vx += dirX * pull * dt;
+        p.vy += dirY * pull * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+
+        const fadeIn = Math.min(age / 0.08, 1);
+        const alpha = fadeIn * (1 - age);
+        if (alpha <= 0.01) return;
+
+        // Cools from the shader's bright cyan core hue toward its deeper
+        // blue-violet as the particle ages and is pulled inward.
+        const hue = 190 + age * 55;
+        const lightness = 85 - age * 35;
+        const radius = Math.max(0.3, p.size * (1 - age * 0.35));
+
+        const speed = Math.hypot(p.vx, p.vy);
+        if (speed > 25) {
+          // A comet-style glowing tail toward where it came from, brighter
+          // and longer the faster it's being pulled in.
+          const tailLen = Math.min(speed * 0.035, 46);
+          ctx.strokeStyle = `hsla(${hue}, 95%, ${lightness}%, ${alpha * 0.6})`;
+          ctx.lineWidth = Math.max(0.6, radius * 0.7);
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x - (p.vx / speed) * tailLen, p.y - (p.vy / speed) * tailLen);
+          ctx.stroke();
+        }
+
+        // A soft glow (radial gradient, not a flat disc) makes each
+        // particle read as a small light source rather than a plain dot.
+        const glowR = radius * 3.2;
+        const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, glowR);
+        glow.addColorStop(0, `hsla(${hue}, 95%, ${lightness}%, ${alpha})`);
+        glow.addColorStop(0.4, `hsla(${hue}, 95%, ${lightness}%, ${alpha * 0.55})`);
+        glow.addColorStop(1, `hsla(${hue}, 95%, ${lightness}%, 0)`);
+        ctx.fillStyle = glow;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, Math.max(p.r, 0.1), 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, glowR, 0, Math.PI * 2);
         ctx.fill();
       });
-      particles = particles.filter((p) => p.life > 0);
+
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  });
+
+  // ---------------------------------------------------------------------
+  // Tracing beam: a scroll-progress rail beside the results column, ported
+  // from the referenced "Tracing Beam" component -- a base path plus a
+  // gradient-stroked copy whose gradient endpoints (y1/y2) are driven by
+  // scroll position through the same mapRange formulas as the source, then
+  // smoothed with a small hand-integrated spring (semi-implicit Euler)
+  // standing in for the source's spring library, since only two scalars
+  // need it. The dot at top switches from the site's accent color to white
+  // once the tracked content has scrolled past its own top edge.
+  // ---------------------------------------------------------------------
+  safe(function initTracingBeam() {
+    const root = document.getElementById("tracing-beam");
+    const content = document.getElementById("tracing-beam-content");
+    if (!root || !content) return;
+    const basePath = root.querySelector(".tracing-beam-path-base");
+    const gradPath = root.querySelector(".tracing-beam-path-gradient");
+    const gradient = root.querySelector("#tracing-beam-gradient");
+    const dotInner = root.querySelector(".tracing-beam-dot-inner");
+    const svg = root.querySelector(".tracing-beam-svg");
+    if (!basePath || !gradPath || !gradient || !dotInner || !svg) return;
+
+    const TENSION = 80;
+    const FRICTION = 26;
+    let svgHeight = 0;
+    let scrollYProgress = 0;
+    let scrollPercentage = 0;
+    let y1 = 0, y2 = 0, v1 = 0, v2 = 0;
+    let lastNow = null;
+
+    function pathFor(h) {
+      return `M 1 0V -36 l 18 24 V ${h * 0.8} l -18 24V ${h}`;
+    }
+
+    function mapRange(value, inMin, inMax, outMin, outMax) {
+      if (inMax === inMin) return outMin;
+      return ((value - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
+    }
+
+    function updateScroll() {
+      const rect = root.getBoundingClientRect();
+      const windowHeight = window.innerHeight;
+      scrollPercentage = (windowHeight - rect.top) / (windowHeight + rect.height);
+      scrollYProgress = (rect.y / windowHeight) * -1;
+      dotInner.classList.toggle("at-top", scrollYProgress > 0);
+    }
+
+    function updateSvgHeight() {
+      svgHeight = content.offsetHeight;
+      const d = pathFor(svgHeight);
+      svg.setAttribute("viewBox", `0 0 20 ${svgHeight}`);
+      svg.setAttribute("height", String(svgHeight));
+      basePath.setAttribute("d", d);
+      gradPath.setAttribute("d", d);
+    }
+
+    window.addEventListener("scroll", () => safe(updateScroll), { passive: true });
+    window.addEventListener("resize", () => safe(() => { updateScroll(); updateSvgHeight(); }));
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => safe(updateSvgHeight)).observe(content);
+    }
+    updateScroll();
+    updateSvgHeight();
+
+    function frame(now) {
+      if (lastNow === null) lastNow = now;
+      const dt = Math.min((now - lastNow) / 1000, 0.05);
+      lastNow = now;
+
+      const targetY1 = mapRange(scrollYProgress, 0, 0.8, scrollYProgress, svgHeight) * (1.4 - scrollPercentage);
+      const targetY2 = mapRange(scrollYProgress, 0, 1, scrollYProgress, svgHeight - 500) * (1.4 - scrollPercentage);
+
+      // Semi-implicit Euler spring integrator (mass = 1): a stand-in for
+      // the source's useSpring(tension, friction), close enough for a
+      // decorative gradient position with no need to match bit-for-bit.
+      v1 += (-TENSION * (y1 - targetY1) - FRICTION * v1) * dt;
+      y1 += v1 * dt;
+      v2 += (-TENSION * (y2 - targetY2) - FRICTION * v2) * dt;
+      y2 += v2 * dt;
+
+      gradient.setAttribute("y1", String(y1));
+      gradient.setAttribute("y2", String(y2));
+
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);

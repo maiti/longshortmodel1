@@ -459,6 +459,50 @@ body.landing-active {
 }
 
 .content-panel { min-width: 0; }
+
+/* ---------- Tracing beam: a scroll-progress rail beside the results column ---------- */
+.tracing-beam {
+  position: relative;
+}
+.tracing-beam-rail {
+  position: absolute;
+  left: -26px;
+  top: 6px;
+  pointer-events: none;
+}
+.tracing-beam-dot {
+  margin-left: 27px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.24);
+  background: rgba(8, 10, 22, 0.6);
+}
+.tracing-beam-dot-inner {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+.tracing-beam-dot-inner.at-top {
+  background: #fff;
+  border-color: #fff;
+}
+.tracing-beam-svg {
+  display: block;
+  margin-left: 16px;
+  overflow: visible;
+}
+@media (max-width: 1100px) {
+  .tracing-beam-rail { display: none; }
+}
 .view { display: none; }
 .view.active { display: block; }
 
