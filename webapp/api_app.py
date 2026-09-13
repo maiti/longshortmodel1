@@ -10,6 +10,7 @@ a backtest against historical or synthetic data and returns JSON.
 
 from __future__ import annotations
 
+import copy
 import os
 import sys
 from pathlib import Path
@@ -40,11 +41,18 @@ app.add_middleware(
 
 @app.get("/api/config/schema")
 def get_config_schema() -> dict[str, Any]:
+    # FastAPI runs a plain `def` route in a threadpool, so two requests to
+    # this endpoint can genuinely execute concurrently. The previous
+    # version mutated CONFIG_SCHEMA (a module-level, process-wide list) in
+    # place on every call -- two overlapping requests could interleave
+    # their writes to the same shared field dicts. Deep-copying first
+    # means each request builds and returns its own independent tree.
     defaults = ModelConfig().to_dict()
-    for group in CONFIG_SCHEMA:
+    schema = copy.deepcopy(CONFIG_SCHEMA)
+    for group in schema:
         for field in group["fields"]:
             field["default"] = defaults[field["key"]]
-    return {"groups": CONFIG_SCHEMA}
+    return {"groups": schema}
 
 
 @app.post("/api/run")
