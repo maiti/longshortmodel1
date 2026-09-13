@@ -690,8 +690,9 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       // Smaller and less energetic than the reference's own defaults --
       // this runs across the whole site, not just a demo box, so it needs
       // to stay a light accent rather than something big/bright enough to
-      // obscure text or buttons underneath it.
-      SPLAT_RADIUS: 0.1,
+      // obscure text or buttons underneath it. (0.065 is ~35% smaller
+      // again on top of the first pass's own reduction from 0.2.)
+      SPLAT_RADIUS: 0.065,
       SPLAT_FORCE: 4200,
     };
 
@@ -1072,21 +1073,33 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     let havePointer = false;
 
     // Gravity: every trail is pulled toward the dashboard singularity's
-    // screen position (viewport center), but only after it's had time to
-    // drift naturally -- a sparse history of recent pointer positions
-    // (sampled well below mousemove's native rate, so this stays cheap)
-    // gets an extra velocity-only splat each frame once it's old enough,
-    // with the pull ramping in quadratically (an acceleration, not an
-    // instant switch) until the trail's total lifetime ends.
-    const GRAVITY_DELAY_MS = 700;
+    // screen position (viewport center), but only once it's already
+    // fading (late in its life, not partway through) -- a sparse history
+    // of recent pointer positions (sampled well below mousemove's native
+    // rate, so this stays cheap) gets an extra velocity-only splat each
+    // frame once it's old enough. A purely radial "toward center" force
+    // has nowhere to bleed off velocity at the center itself, so material
+    // just punches through and keeps going -- flung across the screen
+    // rather than swallowed. A real gravity well doesn't work that way
+    // either (a body falling straight at a mass either collides or slings
+    // around it; only an already-tangential approach settles into an
+    // orbit), so the injected force is mostly tangential at first --
+    // material swings around the singularity rather than straight at it
+    // -- and blends toward radial as the window closes, tightening the
+    // orbit into a dive rather than a stable circle, so it's gone by the
+    // time the trail's lifetime actually expires.
+    const GRAVITY_DELAY_MS = 850;
     const GRAVITY_LIFETIME_MS = 1200;
     const GRAVITY_SAMPLE_INTERVAL_MS = 55;
-    // Much larger than a naive kinematic estimate would suggest: the
-    // solver's incompressibility (pressure projection) resists a purely
-    // convergent velocity field and cancels out a large share of it each
-    // step, so the constant has to substantially overshoot what a
-    // frictionless-particle version of the same pull would need.
-    const GRAVITY_ACCEL = 16000;
+    // ~20% below the previous pass's constant. Still well past a naive
+    // kinematic estimate: the solver's incompressibility (pressure
+    // projection) resists a purely convergent velocity field and cancels
+    // out a large share of it each step, so the constant has to
+    // substantially overshoot what a frictionless-particle version of the
+    // same pull would need.
+    const GRAVITY_ACCEL = 12800;
+    const GRAVITY_ANGLE_START = (85 * Math.PI) / 180; // near-tangential -- swings around, doesn't punch through
+    const GRAVITY_ANGLE_END = (20 * Math.PI) / 180; // mostly radial -- the orbit's final dive into the center
     const ZERO_COLOR = { r: 0, g: 0, b: 0 }; // velocity-only splat: nudges existing dye, adds none
     let gravityHistory = [];
     let lastGravitySampleAt = 0;
@@ -1132,12 +1145,23 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         const rawDx = cx - s.x;
         const rawDy = cy - s.y;
         const dist = Math.hypot(rawDx, rawDy) || 1;
-        // Same texcoord-space convention as splatPointer's own dx/dy, just
-        // pointed toward the singularity instead of the cursor's recent
-        // motion, and scaled by dt since this runs once per frame (an
-        // actual continuous acceleration) rather than once per input event.
-        let dx = (rawDx / dist) * GRAVITY_ACCEL * eased * dt;
-        let dy = -(rawDy / dist) * GRAVITY_ACCEL * eased * dt;
+        const ux = rawDx / dist;
+        const uy = rawDy / dist;
+        // Rotate the toward-center direction from near-tangential down to
+        // mostly-radial as p advances -- an orbit that swings around the
+        // singularity and tightens into a dive, rather than a straight
+        // shot at it that punches through and keeps going.
+        const angle = GRAVITY_ANGLE_START + (GRAVITY_ANGLE_END - GRAVITY_ANGLE_START) * p;
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+        const rotX = ux * cosA - uy * sinA;
+        const rotY = ux * sinA + uy * cosA;
+        // Same texcoord-space convention as splatPointer's own dx/dy
+        // (screen-space direction, then negate Y for texcoord space),
+        // scaled by dt since this runs once per frame (an actual
+        // continuous acceleration) rather than once per input event.
+        let dx = rotX * GRAVITY_ACCEL * eased * dt;
+        let dy = -rotY * GRAVITY_ACCEL * eased * dt;
         if (aspectRatio < 1) dx *= aspectRatio;
         if (aspectRatio > 1) dy /= aspectRatio;
         splat(s.x / window.innerWidth, 1.0 - s.y / window.innerHeight, dx, dy, ZERO_COLOR);
@@ -1241,15 +1265,18 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
 
   // Canvas2D fallback for the cursor trail, used if WebGL or the float
   // texture extensions the fluid sim needs aren't available -- particles
-  // spawned at the pointer that drift naturally for the first 0.7s of a
-  // ~1.2s life, then get pulled toward the dashboard singularity's screen
-  // position with quadratically increasing force (an acceleration, not a
-  // switched-on force) for the rest of it. The pull direction is
-  // recomputed every frame from each particle's current position (true
-  // "gravity", not a frozen initial heading) and rotated by a fixed angle
-  // so particles spiral inward instead of flying a straight line. Colored
-  // along the same amber<->blue accretion palette as the WebGL path, so
-  // the fallback still reads as the same effect.
+  // spawned at the pointer that drift naturally for the first ~0.85s of a
+  // ~1.2s life (unaffected by gravity until they're already fading), then
+  // get pulled toward the dashboard singularity's screen position with
+  // quadratically increasing force (an acceleration, not a switched-on
+  // force) for the rest of it. The pull direction is recomputed every
+  // frame from each particle's current position (true "gravity", not a
+  // frozen initial heading) and rotated from near-tangential toward mostly
+  // radial as the window closes, so particles swing around the singularity
+  // in a tightening orbit and dive in right at the end, rather than being
+  // shot straight at it. Colored along the same amber<->blue accretion
+  // palette as the WebGL path, so the fallback still reads as the same
+  // effect.
   function renderCursorParticlesFallback(canvas) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -1258,9 +1285,10 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     let lastNow = null;
 
     const LIFETIME_MS = 1200;
-    const GRAVITY_DELAY_FRAC = 700 / LIFETIME_MS; // pull stays off for the first 0.7s
-    const PULL_STRENGTH = 5200;
-    const SPIRAL_ANGLE = 0.5;
+    const GRAVITY_DELAY_FRAC = 850 / LIFETIME_MS; // unaffected by gravity until it's already fading
+    const PULL_STRENGTH = 4160; // ~20% below the previous pass's constant
+    const GRAVITY_ANGLE_START = (85 * Math.PI) / 180; // near-tangential -- swings around, doesn't punch through
+    const GRAVITY_ANGLE_END = (20 * Math.PI) / 180; // mostly radial -- the orbit's final dive into the center
 
     function resize() {
       dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1287,7 +1315,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
           vx: (Math.random() - 0.5) * 20,
           vy: (Math.random() - 0.5) * 20,
           born: performance.now(),
-          size: 1.5 + Math.random() * 2.1,
+          size: 1.0 + Math.random() * 1.4, // ~35% smaller than the previous pass
           colorMix: Math.min(1, Math.max(0, cyclePos + (Math.random() - 0.5) * 0.18)),
         });
       }
@@ -1301,8 +1329,6 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
 
       ctx.clearRect(0, 0, w, h);
       const target = { x: w / 2, y: h / 2 };
-      const cosA = Math.cos(SPIRAL_ANGLE);
-      const sinA = Math.sin(SPIRAL_ANGLE);
 
       particles = particles.filter((p) => now - p.born < LIFETIME_MS);
       particles.forEach((p) => {
@@ -1312,9 +1338,15 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         const dist = Math.hypot(dx, dy) || 1;
         const ux = dx / dist;
         const uy = dy / dist;
+        const pullProgress = age < GRAVITY_DELAY_FRAC ? 0 : (age - GRAVITY_DELAY_FRAC) / (1 - GRAVITY_DELAY_FRAC);
+        // Rotate from near-tangential down to mostly-radial as pullProgress
+        // advances -- an orbit that swings around the singularity and
+        // tightens into a dive, not a straight shot that overshoots it.
+        const angle = GRAVITY_ANGLE_START + (GRAVITY_ANGLE_END - GRAVITY_ANGLE_START) * pullProgress;
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
         const dirX = ux * cosA - uy * sinA;
         const dirY = ux * sinA + uy * cosA;
-        const pullProgress = age < GRAVITY_DELAY_FRAC ? 0 : (age - GRAVITY_DELAY_FRAC) / (1 - GRAVITY_DELAY_FRAC);
         const pull = PULL_STRENGTH * pullProgress * pullProgress;
         p.vx += dirX * pull * dt;
         p.vy += dirY * pull * dt;
