@@ -886,6 +886,39 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         gl_FragColor = vec4(velocity, 0.0, 1.0);
       }
     `;
+    // The piece the directional pull alone can't provide: an actual sink.
+    // Injecting velocity toward the center (however it's aimed) only ever
+    // adds motion -- nothing removes it, so anything that reaches the
+    // center with speed left just keeps going. This shader runs
+    // unconditionally every frame (not gated by trail age) and drains
+    // velocity within a fixed radius of the singularity's screen position,
+    // more aggressively the closer to dead-center -- a real capture zone,
+    // so material that drifts in there actually slows and stops rather
+    // than flinging through and out the other side.
+    const captureShader = `
+      precision highp float;
+      varying vec2 vUv;
+      uniform sampler2D uVelocity;
+      uniform vec2 center;
+      uniform float aspectRatio;
+      uniform float radius;
+      uniform float strength;
+      void main () {
+        vec2 p = vUv - center;
+        p.x *= aspectRatio;
+        float d = length(p);
+        // Full damping strength through the inner 80% of the zone, only
+        // tapering to zero in the outer 20% -- a profile that's weak right
+        // at its own boundary (like a plain 1-d/radius falloff) lets
+        // anything moving fast cross that thin, barely-damped outer band
+        // in a single frame with almost no braking applied, then coast
+        // through the stronger inner region on speed it never lost. This
+        // brakes hard as soon as something is inside the zone at all.
+        float damp = clamp((radius - d) / (radius * 0.2), 0.0, 1.0);
+        vec2 vel = texture2D(uVelocity, vUv).xy;
+        gl_FragColor = vec4(vel * (1.0 - strength * damp), 0.0, 1.0);
+      }
+    `;
     const displayShader = `
       precision highp float;
       varying vec2 vUv;
@@ -927,7 +960,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     }
 
     let copyProgram, clearProgram, splatProgram, advectionProgram, divergenceProgram,
-      curlProgram, vorticityProgram, pressureProgram, gradientSubtractProgram, displayProgram;
+      curlProgram, vorticityProgram, pressureProgram, gradientSubtractProgram, captureProgram, displayProgram;
     try {
       copyProgram = createProgram(baseVertexShader, copyShader);
       clearProgram = createProgram(baseVertexShader, clearShader);
@@ -938,6 +971,7 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       vorticityProgram = createProgram(baseVertexShader, vorticityShader);
       pressureProgram = createProgram(baseVertexShader, pressureShader);
       gradientSubtractProgram = createProgram(baseVertexShader, gradientSubtractShader);
+      captureProgram = createProgram(baseVertexShader, captureShader);
       displayProgram = createProgram(baseVertexShader, displayShader);
     } catch (e) {
       console.warn("[effects] fluid cursor shader setup failed, using 2D fallback:", e);
@@ -1091,15 +1125,22 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
     const GRAVITY_DELAY_MS = 850;
     const GRAVITY_LIFETIME_MS = 1200;
     const GRAVITY_SAMPLE_INTERVAL_MS = 55;
-    // ~20% below the previous pass's constant. Still well past a naive
-    // kinematic estimate: the solver's incompressibility (pressure
-    // projection) resists a purely convergent velocity field and cancels
-    // out a large share of it each step, so the constant has to
-    // substantially overshoot what a frictionless-particle version of the
-    // same pull would need.
-    const GRAVITY_ACCEL = 12800;
-    const GRAVITY_ANGLE_START = (85 * Math.PI) / 180; // near-tangential -- swings around, doesn't punch through
+    // Lower than the previous pass: an angle this close to pure tangential
+    // (was 85 degrees) combined with a strong accel imparts enough angular
+    // speed on its own to sling material in a wide arc across the screen
+    // before it ever gets near the capture zone below -- still "flinging",
+    // just curved instead of straight. A real (if modest) radial component
+    // throughout keeps it converging inward the whole time rather than
+    // swinging wide first.
+    const GRAVITY_ACCEL = 9000;
+    const GRAVITY_ANGLE_START = (60 * Math.PI) / 180; // curves, but always net inward -- no wide swing-out
     const GRAVITY_ANGLE_END = (20 * Math.PI) / 180; // mostly radial -- the orbit's final dive into the center
+    // The actual sink -- see captureShader above. Radius is in UV units
+    // (0..1 across the shorter screen dimension); strength is the fraction
+    // of velocity removed per frame at dead-center, so it compounds fast
+    // (60 frames/sec) without needing a huge single-frame value.
+    const CAPTURE_RADIUS = 0.2;
+    const CAPTURE_STRENGTH = 0.45;
     const ZERO_COLOR = { r: 0, g: 0, b: 0 }; // velocity-only splat: nudges existing dye, adds none
     let gravityHistory = [];
     let lastGravitySampleAt = 0;
@@ -1214,6 +1255,21 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
       blit(velocity.write);
       velocity.swap();
 
+      // Capture zone: drains velocity within a fixed radius of the
+      // singularity's screen position every frame, regardless of trail
+      // age -- this is what actually stops material there instead of
+      // letting it fling through on whatever speed the directional pull
+      // gave it. Runs before self-advection so the damped field is what
+      // actually carries both velocity and dye forward.
+      gl.useProgram(captureProgram.program);
+      gl.uniform2f(captureProgram.uniforms.center, 0.5, 0.5);
+      gl.uniform1f(captureProgram.uniforms.aspectRatio, canvas.width / canvas.height);
+      gl.uniform1f(captureProgram.uniforms.radius, CAPTURE_RADIUS);
+      gl.uniform1f(captureProgram.uniforms.strength, CAPTURE_STRENGTH);
+      gl.uniform1i(captureProgram.uniforms.uVelocity, velocity.read.attach(0));
+      blit(velocity.write);
+      velocity.swap();
+
       gl.useProgram(advectionProgram.program);
       gl.uniform2f(advectionProgram.uniforms.texelSize, velocity.texelSizeX, velocity.texelSizeY);
       gl.uniform1i(advectionProgram.uniforms.uVelocity, velocity.read.attach(0));
@@ -1286,8 +1342,8 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
 
     const LIFETIME_MS = 1200;
     const GRAVITY_DELAY_FRAC = 850 / LIFETIME_MS; // unaffected by gravity until it's already fading
-    const PULL_STRENGTH = 4160; // ~20% below the previous pass's constant
-    const GRAVITY_ANGLE_START = (85 * Math.PI) / 180; // near-tangential -- swings around, doesn't punch through
+    const PULL_STRENGTH = 2900; // lower than the previous pass -- see the WebGL path's own comment on why
+    const GRAVITY_ANGLE_START = (60 * Math.PI) / 180; // curves, but always net inward -- no wide swing-out
     const GRAVITY_ANGLE_END = (20 * Math.PI) / 180; // mostly radial -- the orbit's final dive into the center
 
     function resize() {
@@ -1350,6 +1406,21 @@ initLanding(); // unwrapped: this must run regardless of what else on this page 
         const pull = PULL_STRENGTH * pullProgress * pullProgress;
         p.vx += dirX * pull * dt;
         p.vy += dirY * pull * dt;
+
+        // The actual sink -- mirrors the WebGL path's capture shader.
+        // Adding directional force alone never stops a particle at the
+        // center; it just keeps going on whatever speed it built up. Full
+        // damping strength through the inner 80% of the zone (only
+        // tapering to zero in the outer 20%) so anything entering the
+        // zone at all gets braked immediately, instead of coasting
+        // through a barely-damped outer band on speed it never lost.
+        const captureRadius = Math.min(w, h) * 0.18;
+        if (dist < captureRadius) {
+          const damp = 1 - 0.45 * Math.min(1, (captureRadius - dist) / (captureRadius * 0.2));
+          p.vx *= damp;
+          p.vy *= damp;
+        }
+
         p.x += p.vx * dt;
         p.y += p.vy * dt;
 
